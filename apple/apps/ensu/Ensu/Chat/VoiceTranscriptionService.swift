@@ -82,21 +82,40 @@ final class VoiceTranscriptionService {
     typealias StateHandler = @MainActor @Sendable (VoiceInputState) -> Void
     typealias TranscriptHandler = @MainActor @Sendable (String) -> Void
 
-    weak var modelMaintenance: (any ModelMaintenance)?
-    private let transcriber: Transcriber
+    var onTaskActivityChanged: (@MainActor @Sendable (Bool) -> Void)?
+    private let provider: LlmProvider
     private let assetStore: AssetStore
     private let modelAssets: [Asset]
     private var transcriptionTask: Task<Void, Never>?
     private var preloadTask: Task<Void, Never>?
+    private var voiceOwner = UUID()
     private var activeVoiceTaskId = UUID()
     private var activeDownloadId: UUID?
+    private var activeTaskCount = 0
+
+    var hasActiveTasks: Bool { activeTaskCount > 0 }
 
     private let recorder = PcmAudioRecorder()
 
-    init(transcriber: Transcriber, assetStore: AssetStore) {
-        self.transcriber = transcriber
+    init(provider: LlmProvider, assetStore: AssetStore) {
+        self.provider = provider
         self.assetStore = assetStore
         self.modelAssets = [transcriptionModelAsset(), voiceActivityModelAsset()]
+    }
+
+    private func launchVoiceTask(
+        priority: TaskPriority, operation: @escaping @Sendable () async -> Void
+    ) -> Task<Void, Never> {
+        activeTaskCount += 1
+        if activeTaskCount == 1 { onTaskActivityChanged?(true) }
+        let task = Task.detached(priority: priority, operation: operation)
+        Task { [weak self] in
+            await task.value
+            guard let self else { return }
+            self.activeTaskCount -= 1
+            if self.activeTaskCount == 0 { self.onTaskActivityChanged?(false) }
+        }
+        return task
     }
 
     func startRecording(
@@ -113,7 +132,7 @@ final class VoiceTranscriptionService {
         case .denied:
             onState(.error("Microphone permission is required for voice input."))
         case .undetermined:
-            session.requestRecordPermission { [weak self] granted in
+            session.requestRecordPermission { @Sendable [weak self] granted in
                 Task { @MainActor in
                     guard let self else { return }
                     if granted {
@@ -140,33 +159,26 @@ final class VoiceTranscriptionService {
         let recording = recorder.stop()
 
         guard recording.pcm.count >= minimumRecordingBytes(sampleRate: recording.sampleRate) else {
+            releaseVoice()
             onState(.error("No speech captured."))
             return
         }
 
         let taskId = beginVoiceTask()
         let downloadId = beginDownload(taskId: taskId)
-        let transcriber = transcriber
+        let provider = provider
         let sampleRate = recording.sampleRate
         let pcm = recording.pcm
+        let owner = voiceOwner
 
-        let maintenance = modelMaintenance
-        let maintenanceScope = maintenance?.suspendMaintenance()
-        transcriptionTask = Task.detached(priority: .userInitiated) { [weak self] in
-            defer { maintenanceScope?.close() }
-            await maintenance?.awaitMaintenance()
+        transcriptionTask = launchVoiceTask(priority: .userInitiated) { [weak self] in
+            defer { Task.detached { await provider.releaseVoice(owner: owner) } }
             do {
                 try await self?.downloadModelsIfNeeded(
                     taskId: taskId,
                     downloadId: downloadId,
                     onState: onState
                 )
-
-                if Task.isCancelled { return }
-                let preloadTask = await MainActor.run { [weak self] in
-                    self?.takePreloadTask()
-                }
-                await preloadTask?.value
 
                 if Task.isCancelled { return }
                 let isActive = await MainActor.run { [weak self] in
@@ -178,8 +190,13 @@ final class VoiceTranscriptionService {
                     guard self?.isVoiceTaskActive(taskId) == true else { return }
                     onState(.transcribing)
                 }
-                let transcript = try transcriber.transcribe(inputSampleRate: sampleRate, pcmLe: pcm)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let preload = await MainActor.run { self?.preloadTask }
+                await preload?.value
+                try Task.checkCancellation()
+                let transcript = try await provider.transcribe(
+                    inputSampleRate: sampleRate, pcmLe: pcm
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
                 if Task.isCancelled { return }
                 await MainActor.run { [weak self] in
@@ -199,17 +216,19 @@ final class VoiceTranscriptionService {
                 await MainActor.run { [weak self] in
                     self?.finishDownload(downloadId: downloadId)
                     guard self?.isVoiceTaskActive(taskId) == true else { return }
-                    onState(.error("Could not transcribe voice input."))
+                    onState(
+                        .error(
+                            error is ModelMemoryUnavailable
+                                ? error.localizedDescription : "Could not transcribe voice input."))
                 }
             }
         }
     }
 
     func cancel() {
+        releaseVoice()
         transcriptionTask?.cancel()
         transcriptionTask = nil
-        preloadTask?.cancel()
-        preloadTask = nil
         activeVoiceTaskId = UUID()
         activeDownloadId = nil
         if recorder.isRecording {
@@ -224,11 +243,7 @@ final class VoiceTranscriptionService {
         let taskId = beginVoiceTask()
         let downloadId = beginDownload(taskId: taskId)
 
-        let maintenance = modelMaintenance
-        let maintenanceScope = maintenance?.suspendMaintenance()
-        transcriptionTask = Task.detached(priority: .userInitiated) { [weak self] in
-            defer { maintenanceScope?.close() }
-            await maintenance?.awaitMaintenance()
+        transcriptionTask = launchVoiceTask(priority: .userInitiated) { [weak self] in
             do {
                 try await self?.downloadModelsIfNeeded(
                     taskId: taskId,
@@ -245,7 +260,7 @@ final class VoiceTranscriptionService {
                         return
                     }
                     self.beginRecording(onState: onState)
-                    self.preloadTranscriptionModel()
+                    if self.recorder.isRecording { self.preloadTranscriptionModel() }
                 }
             } catch is CancellationError {
                 return
@@ -297,27 +312,21 @@ final class VoiceTranscriptionService {
     }
 
     private func preloadTranscriptionModel() {
-        let transcriber = transcriber
-        preloadTask?.cancel()
-        let maintenance = modelMaintenance
-        let maintenanceScope = maintenance?.suspendMaintenance()
-        preloadTask = Task.detached(priority: .utility) {
-            defer { maintenanceScope?.close() }
-            await maintenance?.awaitMaintenance()
-            do {
-                try transcriber.loadModel()
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
+        let provider = provider
+        voiceOwner = UUID()
+        let owner = voiceOwner
+        preloadTask = launchVoiceTask(priority: .utility) {
+            try? await provider.prewarmVoice(owner: owner)
         }
     }
 
-    private func takePreloadTask() -> Task<Void, Never>? {
-        let task = preloadTask
+    private func releaseVoice() {
+        preloadTask?.cancel()
         preloadTask = nil
-        return task
+        let owner = voiceOwner
+        voiceOwner = UUID()
+        let provider = provider
+        _ = launchVoiceTask(priority: .utility) { await provider.releaseVoice(owner: owner) }
     }
 
     private func isVoiceTaskActive(_ taskId: UUID) -> Bool {

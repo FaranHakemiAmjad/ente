@@ -1,12 +1,15 @@
 import { ArrowLeft02Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Box, Skeleton } from "@mui/material";
+import type { SpaceActionPhase } from "components/ActionFeedback";
 import { spaceAppAvatarCropSize } from "components/AvatarCropPage";
 import { SpaceAvatarImage } from "components/AvatarImage";
+import { ConfirmationActionSheet } from "components/ConfirmationActionSheet";
 import React, { useEffect, useRef } from "react";
 import type { SetupProfile } from "screens/SetupProfileScreen";
 import {
     spaceAppBackground,
+    spaceDanger,
     spaceOnAccent,
     spaceSurface,
     spaceText,
@@ -21,7 +24,7 @@ import {
 
 const green = "#08C225";
 const textBase = spaceText;
-const profileCoverBackground = "#1F1F1F";
+const profileCoverBackground = spaceSurface;
 const profileAvatarSkeletonBackground = spaceSurface;
 export const friendProfileImageViewerBackground = "#000000";
 
@@ -130,6 +133,7 @@ export const FriendProfileImageViewerScreen: React.FC<
 
 interface ProfileImageViewerScreenProps {
     onBack: () => void;
+    onRemoveImage?: () => Promise<void>;
     onSelectFile: (file: File) => void;
     profile: SetupProfile;
     variant: "avatar" | "cover";
@@ -137,10 +141,19 @@ interface ProfileImageViewerScreenProps {
 
 export const ProfileImageViewerScreen: React.FC<
     ProfileImageViewerScreenProps
-> = ({ onBack, onSelectFile, profile, variant }) => {
+> = ({ onBack, onRemoveImage, onSelectFile, profile, variant }) => {
     const inputRef = useRef<HTMLInputElement | null>(null);
+    const [isRemoveImageSheetOpen, setIsRemoveImageSheetOpen] =
+        React.useState(false);
+    const [removeImageActionPhase, setRemoveImageActionPhase] =
+        React.useState<SpaceActionPhase | null>(null);
+    const [removeImageErrorMessage, setRemoveImageErrorMessage] =
+        React.useState<string | null>(null);
     const isCover = variant == "cover";
     const title = isCover ? "Cover image" : "Profile picture";
+    const removeLabel = isCover
+        ? "Remove cover image"
+        : "Remove profile picture";
     const actionLabel = isCover
         ? "Change cover image"
         : "Change profile picture";
@@ -163,6 +176,31 @@ export const ProfileImageViewerScreen: React.FC<
         if (file) onSelectFile(file);
     };
 
+    const cancelRemoveImage = () => {
+        if (removeImageActionPhase) return;
+        setRemoveImageErrorMessage(null);
+        setIsRemoveImageSheetOpen(false);
+    };
+
+    const confirmRemoveImage = async () => {
+        if (!onRemoveImage || removeImageActionPhase) return;
+
+        setRemoveImageActionPhase("busy");
+        setRemoveImageErrorMessage(null);
+        try {
+            await onRemoveImage();
+            setIsRemoveImageSheetOpen(false);
+            setRemoveImageActionPhase(null);
+        } catch (error) {
+            setRemoveImageErrorMessage(
+                error instanceof Error
+                    ? error.message
+                    : `Couldn't remove your ${isCover ? "cover image" : "profile picture"}. Please try again.`,
+            );
+            setRemoveImageActionPhase(null);
+        }
+    };
+
     return (
         <Box
             component="main"
@@ -170,7 +208,7 @@ export const ProfileImageViewerScreen: React.FC<
                 background: spaceAppBackground,
                 color: textBase,
                 display: "grid",
-                minHeight: "100svh",
+                minHeight: "var(--space-page-height, 100svh)",
                 overflowX: "hidden",
                 placeItems: { xs: "stretch", sm: "start center" },
             }}
@@ -180,8 +218,9 @@ export const ProfileImageViewerScreen: React.FC<
                     bgcolor: "transparent",
                     boxSizing: "border-box",
                     display: "grid",
-                    gridTemplateRows: "56px minmax(0, 1fr) auto",
-                    minHeight: "100svh",
+                    gridTemplateRows:
+                        "calc(68px + var(--space-ios-safe-area-top, 0px)) minmax(0, 1fr) auto",
+                    minHeight: "var(--space-page-height, 100svh)",
                     mx: "auto",
                     width: "100%",
                     "@media (min-width: 600px)": { maxWidth: 390 },
@@ -205,15 +244,17 @@ export const ProfileImageViewerScreen: React.FC<
                         alignItems: "center",
                         display: "grid",
                         gridTemplateColumns: `${spaceTouchTargetSize}px 1fr ${spaceTouchTargetSize}px`,
-                        height: 56,
-                        px: 2,
+                        height: "calc(68px + var(--space-ios-safe-area-top, 0px))",
+                        pt: "var(--space-ios-safe-area-top, 0px)",
+                        pl: "max(16px, var(--space-ios-safe-area-left, 0px))",
+                        pr: "max(16px, var(--space-ios-safe-area-right, 0px))",
                         width: "100%",
                     }}
                 >
                     <Box
                         component="button"
                         type="button"
-                        aria-label="Back to profile"
+                        aria-label="Back"
                         onClick={onBack}
                         sx={{
                             alignItems: "center",
@@ -372,8 +413,55 @@ export const ProfileImageViewerScreen: React.FC<
                     >
                         {actionLabel}
                     </Box>
+                    {onRemoveImage && (
+                        <Box
+                            component="button"
+                            type="button"
+                            disabled={Boolean(removeImageActionPhase)}
+                            onClick={() => {
+                                setRemoveImageErrorMessage(null);
+                                setIsRemoveImageSheetOpen(true);
+                            }}
+                            sx={{
+                                bgcolor: "transparent",
+                                border: 0,
+                                color: spaceDanger,
+                                cursor: removeImageActionPhase
+                                    ? "default"
+                                    : "pointer",
+                                display: "block",
+                                fontFamily:
+                                    '"Inter Variable", Inter, sans-serif',
+                                fontSize: 14,
+                                fontWeight: 500,
+                                height: 44,
+                                lineHeight: "20px",
+                                mt: 1,
+                                p: 0,
+                                width: "100%",
+                                "&:focus-visible": {
+                                    outline: `2px solid ${spaceDanger}`,
+                                    outlineOffset: 3,
+                                },
+                            }}
+                        >
+                            {removeLabel}
+                        </Box>
+                    )}
                 </Box>
             </Box>
+            <ConfirmationActionSheet
+                open={isRemoveImageSheetOpen}
+                title={`${removeLabel}?`}
+                description={`Your profile will use the default ${isCover ? "cover image" : "profile picture"}.`}
+                confirmLabel={removeLabel}
+                confirmActionPhase={removeImageActionPhase}
+                confirmDisabled={Boolean(removeImageActionPhase)}
+                errorMessage={removeImageErrorMessage}
+                cancelDisabled={Boolean(removeImageActionPhase)}
+                onCancel={cancelRemoveImage}
+                onConfirm={() => void confirmRemoveImage()}
+            />
         </Box>
     );
 };

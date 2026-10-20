@@ -1,9 +1,7 @@
-use llama_cpp_2::TokenToStringError;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::mtmd::{MtmdBitmap, MtmdInputText, mtmd_default_marker};
-use llama_cpp_2::openai::OpenAIChatTemplateParams;
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use serde::{Deserialize, Serialize};
@@ -14,8 +12,9 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use super::context::Context;
-use super::event::{EventSink, GenerationEvent, GenerationSummary, JobId};
+use super::context::LocalContext;
+use super::event::{EventSink, FinishReason, GenerationEvent, GenerationSummary, JobId};
+use super::template::build_chat_prompt;
 use super::{Error, format_error, lock};
 
 static JOB_COUNTER: AtomicI64 = AtomicI64::new(1);
@@ -27,7 +26,7 @@ fn cancel_flags() -> &'static Mutex<HashMap<JobId, Arc<AtomicBool>>> {
     CANCEL_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn register_job() -> (JobId, Arc<AtomicBool>) {
+pub(super) fn register_job() -> (JobId, Arc<AtomicBool>) {
     let job_id = JOB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let flag = Arc::new(AtomicBool::new(false));
     lock(cancel_flags()).insert(job_id, flag.clone());
@@ -48,7 +47,7 @@ fn check_cancelled(cancel_flag: &AtomicBool) -> Result<(), Error> {
     }
 }
 
-struct JobGuard(JobId);
+pub(super) struct JobGuard(pub(super) JobId);
 
 impl Drop for JobGuard {
     fn drop(&mut self) {
@@ -73,7 +72,7 @@ struct SamplingParams {
     grammar: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub template_override: Option<String>,
@@ -93,117 +92,31 @@ pub struct ChatRequest {
     pub grammar: Option<String>,
 }
 
-fn token_piece_bytes(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, TokenToStringError> {
-    match model.token_to_piece_bytes(token, 8, true, None) {
-        #[expect(
-            clippy::expect_used,
-            reason = "llama.cpp reports insufficient buffer capacity as a negative byte count"
-        )]
-        Err(TokenToStringError::InsufficientBufferSpace(required)) => model.token_to_piece_bytes(
-            token,
-            (-required)
-                .try_into()
-                .expect("error buffer size is positive"),
-            true,
-            None,
-        ),
-        result => result,
-    }
-}
-
 fn token_piece_string(model: &LlamaModel, token: LlamaToken) -> Option<String> {
-    String::from_utf8(token_piece_bytes(model, token).ok()?).ok()
-}
-
-fn build_chat_prompt(
-    model: &LlamaModel,
-    messages: Vec<ChatMessage>,
-    template_override: Option<String>,
-    add_assistant: bool,
-) -> Result<String, Error> {
-    let template_text = match template_override {
-        Some(template) => template,
-        None => model
-            .chat_template(None)
-            .ok()
-            .and_then(|template| template.to_string().ok())
-            .unwrap_or_else(|| "chatml".to_string()),
-    };
-    let template = LlamaChatTemplate::new(&template_text)
-        .map_err(|err| Error::InvalidInput(format_error("Invalid chat template", err)))?;
-
-    if template_text.contains("enable_thinking") {
-        let messages_json = serde_json::to_string(&messages)
-            .map_err(|err| Error::InvalidInput(format_error("Invalid chat messages", err)))?;
-        let params = OpenAIChatTemplateParams {
-            messages_json: &messages_json,
-            tools_json: None,
-            tool_choice: None,
-            json_schema: None,
-            grammar: None,
-            reasoning_format: None,
-            chat_template_kwargs: Some(r#"{"enable_thinking":false}"#),
-            add_generation_prompt: add_assistant,
-            use_jinja: true,
-            parallel_tool_calls: false,
-            enable_thinking: false,
-            add_bos: false,
-            add_eos: false,
-            parse_tool_calls: false,
-        };
-        let result = model
-            .apply_chat_template_oaicompat(&template, &params)
-            .map_err(|err| Error::Llama {
-                op: "Failed to apply chat template",
-                message: err.to_string(),
-            })?;
-        return Ok(result.prompt);
+    if token.0 < 0 {
+        return None;
     }
-
-    let chat_messages = messages
-        .into_iter()
-        .map(|message| {
-            LlamaChatMessage::new(message.role, message.content)
-                .map_err(|err| Error::InvalidInput(format_error("Invalid chat message", err)))
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-
-    model
-        .apply_chat_template(&template, &chat_messages, add_assistant)
-        .map_err(|err| Error::Llama {
-            op: "Failed to apply chat template",
-            message: err.to_string(),
-        })
+    String::from_utf8(model.vocab().token_to_piece(token, true, None)).ok()
 }
 
-fn should_add_bos(model: &LlamaModel, prompt: &str) -> AddBos {
-    if let Some(bos) = token_piece_string(model, model.token_bos())
+fn should_add_bos(model: &LlamaModel, prompt: &str) -> bool {
+    if let Some(bos) = token_piece_string(model, model.vocab().bos())
         && !bos.is_empty()
         && prompt.starts_with(&bos)
     {
-        return AddBos::Never;
+        return false;
     }
-    AddBos::Always
+    true
 }
 
-fn find_stop_index(text: &str, stop_sequences: &[String], start: usize) -> Option<usize> {
-    let mut found: Option<usize> = None;
-    let search = &text[start.min(text.len())..];
-
-    for stop in stop_sequences {
-        if stop.is_empty() {
-            continue;
-        }
-        if let Some(idx) = search.find(stop) {
-            let idx = start + idx;
-            found = match found {
-                Some(existing) if existing <= idx => Some(existing),
-                _ => Some(idx),
-            };
-        }
+fn tokenize_text_prompt(model: &LlamaModel, prompt: &str) -> Result<Vec<LlamaToken>, Error> {
+    let tokens = model
+        .vocab()
+        .tokenize(prompt.as_bytes(), should_add_bos(model, prompt), true);
+    if tokens.is_empty() {
+        return Err(Error::InvalidInput("Prompt produced no tokens".to_string()));
     }
-
-    found
+    Ok(tokens)
 }
 
 fn drain_utf8(pending: &mut Vec<u8>) -> String {
@@ -246,75 +159,65 @@ struct DecodeStep {
 }
 
 struct StreamDecoder {
-    generated_text: String,
+    pending_text: String,
     pending_bytes: Vec<u8>,
     stop_sequences: Vec<String>,
-    max_stop_len: usize,
 }
 
 impl StreamDecoder {
     fn new(stop_sequences: &[String]) -> Self {
-        let max_stop_len = stop_sequences.iter().map(String::len).max().unwrap_or(0);
         Self {
-            generated_text: String::new(),
+            pending_text: String::new(),
             pending_bytes: Vec::new(),
             stop_sequences: stop_sequences.to_vec(),
-            max_stop_len,
         }
     }
 
     fn push_bytes(&mut self, bytes: &[u8]) -> DecodeStep {
-        if !bytes.is_empty() {
-            self.pending_bytes.extend_from_slice(bytes);
-        }
-        let piece = drain_utf8(&mut self.pending_bytes);
-        self.push_text(piece)
+        self.pending_bytes.extend_from_slice(bytes);
+        self.pending_text
+            .push_str(&drain_utf8(&mut self.pending_bytes));
+        self.emit(false)
     }
 
     fn flush(&mut self) -> DecodeStep {
-        if self.pending_bytes.is_empty() {
-            return DecodeStep {
-                text: None,
-                stop: false,
-            };
-        }
-        let piece = String::from_utf8_lossy(&self.pending_bytes).to_string();
+        self.pending_text
+            .push_str(&String::from_utf8_lossy(&self.pending_bytes));
         self.pending_bytes.clear();
-        self.push_text(piece)
+        self.emit(true)
     }
 
-    fn push_text(&mut self, piece: String) -> DecodeStep {
-        if piece.is_empty() {
-            return DecodeStep {
-                text: None,
-                stop: false,
-            };
+    fn emit(&mut self, final_piece: bool) -> DecodeStep {
+        let stop_index = self
+            .stop_sequences
+            .iter()
+            .filter(|stop| !stop.is_empty())
+            .filter_map(|stop| self.pending_text.find(stop))
+            .min();
+        let keep = if stop_index.is_none() && !final_piece {
+            self.stop_sequences
+                .iter()
+                .flat_map(|stop| {
+                    stop.char_indices()
+                        .skip(1)
+                        .filter(|(end, _)| self.pending_text.ends_with(&stop[..*end]))
+                        .map(|(end, _)| end)
+                })
+                .max()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let end = stop_index.unwrap_or(self.pending_text.len() - keep);
+        let text = self.pending_text[..end].to_owned();
+        if stop_index.is_some() {
+            self.pending_text.clear();
+        } else {
+            self.pending_text.drain(..end);
         }
-
-        let prev_len = self.generated_text.len();
-        self.generated_text.push_str(&piece);
-
-        if self.max_stop_len > 0 {
-            let search_start = prev_len.saturating_sub(self.max_stop_len);
-            if let Some(stop_index) =
-                find_stop_index(&self.generated_text, &self.stop_sequences, search_start)
-            {
-                let new_piece = self.generated_text[prev_len..stop_index].to_string();
-                self.generated_text.truncate(stop_index);
-                return DecodeStep {
-                    text: if new_piece.is_empty() {
-                        None
-                    } else {
-                        Some(new_piece)
-                    },
-                    stop: true,
-                };
-            }
-        }
-
         DecodeStep {
-            text: Some(piece),
-            stop: false,
+            text: (!text.is_empty()).then_some(text),
+            stop: stop_index.is_some(),
         }
     }
 }
@@ -327,6 +230,7 @@ struct GenerationJob<'a> {
     stop_sequences: &'a [String],
     prompt_tokens: i32,
     generated_tokens: i32,
+    finish_reason: FinishReason,
 }
 
 impl GenerationJob<'_> {
@@ -342,34 +246,39 @@ impl GenerationJob<'_> {
         let mut stop_triggered = false;
         let n_ctx = ctx.n_ctx();
 
-        for _ in 0..self.max_tokens {
-            if self.cancel_flag.load(Ordering::Relaxed) {
-                return Err(Error::Cancelled);
-            }
-            if pos >= n_ctx as i32 {
-                break;
-            }
+        self.finish_reason = FinishReason::OutputLimit;
+        for sample_index in 0..self.max_tokens {
+            check_cancelled(self.cancel_flag)?;
 
             let token = sampler.sample(ctx, logits_index);
-            sampler.accept(token);
-            self.generated_tokens = self.generated_tokens.saturating_add(1);
+            check_cancelled(self.cancel_flag)?;
 
-            if ctx.model.is_eog_token(token) {
+            if ctx.model.vocab().is_eog(token) {
+                self.generated_tokens = self.generated_tokens.saturating_add(1);
+                self.finish_reason = FinishReason::Eog;
                 break;
             }
+            if pos >= n_ctx as i32 {
+                self.finish_reason = FinishReason::ContextLimit;
+                break;
+            }
+            self.generated_tokens = self.generated_tokens.saturating_add(1);
 
-            let bytes = token_piece_bytes(ctx.model, token).map_err(|err| Error::Llama {
-                op: "Detokenize failed",
-                message: err.to_string(),
-            })?;
+            let bytes = ctx.model.vocab().token_to_piece(token, true, None);
             let step = decoder.push_bytes(&bytes);
 
             if let Some(text) = step.text {
                 self.emit_text(text, Some(token.0));
             }
+            check_cancelled(self.cancel_flag)?;
 
             if step.stop {
                 stop_triggered = true;
+                self.finish_reason = FinishReason::StopSequence;
+                break;
+            }
+
+            if sample_index + 1 == self.max_tokens {
                 break;
             }
 
@@ -400,10 +309,15 @@ impl GenerationJob<'_> {
 
         if !stop_triggered {
             let step = decoder.flush();
+            if step.stop {
+                self.finish_reason = FinishReason::StopSequence;
+            }
             if let Some(text) = step.text {
                 self.emit_text(text, None);
             }
         }
+
+        check_cancelled(self.cancel_flag)?;
 
         Ok(())
     }
@@ -417,7 +331,11 @@ impl GenerationJob<'_> {
     }
 }
 
-fn build_sampler(model: &LlamaModel, request: &SamplingParams) -> Result<LlamaSampler, Error> {
+fn build_sampler(
+    model: &LlamaModel,
+    request: &SamplingParams,
+    context_size: i32,
+) -> Result<LlamaSampler, Error> {
     let mut samplers = Vec::new();
 
     let mut repeat_penalty = request.repeat_penalty.unwrap_or(1.0);
@@ -438,7 +356,8 @@ fn build_sampler(model: &LlamaModel, request: &SamplingParams) -> Result<LlamaSa
         || presence_penalty != 0.0
     {
         samplers.push(LlamaSampler::penalties(
-            -1,
+            model.vocab().n_tokens(),
+            context_size,
             repeat_penalty,
             frequency_penalty,
             presence_penalty,
@@ -478,20 +397,100 @@ fn build_sampler(model: &LlamaModel, request: &SamplingParams) -> Result<LlamaSa
     Ok(LlamaSampler::chain_simple(samplers))
 }
 
-impl Context {
+impl LocalContext {
+    pub fn measure_text_chat_prompt(&self, request: &ChatRequest) -> Result<usize, Error> {
+        if request
+            .image_paths
+            .as_ref()
+            .is_some_and(|paths| !paths.is_empty())
+        {
+            return Err(Error::Unsupported(
+                "Text measurement does not count image positions",
+            ));
+        }
+        self.with_context_and_cache_mut(|ctx, _| {
+            let prompt = build_chat_prompt(
+                ctx.model,
+                request.messages.clone(),
+                request.template_override.clone(),
+                request.add_assistant.unwrap_or(true),
+            )?;
+            Ok(tokenize_text_prompt(ctx.model, &prompt)?.len())
+        })
+    }
+
     pub fn generate_chat_stream(
         &self,
         request: ChatRequest,
         sink: &mut dyn EventSink,
+        job_id: JobId,
+        cancel_flag: Arc<AtomicBool>,
+        start: Instant,
     ) -> Result<GenerationSummary, Error> {
-        generate_chat_stream(self, request, sink)
+        generate_chat_stream(self, request, sink, job_id, cancel_flag, start)
+    }
+
+    pub fn truncate_text_chat_messages(
+        &self,
+        messages: Vec<ChatMessage>,
+        max_tokens: u32,
+    ) -> Result<Vec<ChatMessage>, Error> {
+        let max_tokens = max_tokens.min(self.context_size());
+        let mut request = ChatRequest {
+            messages,
+            ..Default::default()
+        };
+        loop {
+            let tokens = self.measure_text_chat_prompt(&request)?;
+            if tokens <= max_tokens as usize {
+                return Ok(request.messages);
+            }
+            let index = request
+                .messages
+                .iter()
+                .rposition(|message| message.role != "system")
+                .ok_or(Error::PromptTooLong {
+                    tokens,
+                    context_size: max_tokens,
+                })?;
+            let content = std::mem::take(&mut request.messages[index].content);
+            let tokens = self.measure_text_chat_prompt(&request)?;
+            if tokens > max_tokens as usize {
+                if request.messages[..index]
+                    .iter()
+                    .all(|message| message.role == "system")
+                {
+                    return Err(Error::PromptTooLong {
+                        tokens,
+                        context_size: max_tokens,
+                    });
+                }
+                request.messages.remove(index);
+                continue;
+            }
+            let (mut low, mut high) = (0, content.len());
+            while low < high {
+                let end = content.ceil_char_boundary(low + (high - low).div_ceil(2));
+                request.messages[index].content = content[..end].to_owned();
+                if self.measure_text_chat_prompt(&request)? <= max_tokens as usize {
+                    low = end;
+                } else {
+                    high = content.floor_char_boundary(end - 1);
+                }
+            }
+            request.messages[index].content = content[..low].to_owned();
+            return Ok(request.messages);
+        }
     }
 }
 
 fn generate_chat_stream(
-    context: &Context,
+    context: &LocalContext,
     request: ChatRequest,
     sink: &mut dyn EventSink,
+    job_id: JobId,
+    cancel_flag: Arc<AtomicBool>,
+    start: Instant,
 ) -> Result<GenerationSummary, Error> {
     let ChatRequest {
         messages,
@@ -512,16 +511,6 @@ fn generate_chat_stream(
         grammar,
     } = request;
 
-    let (job_id, cancel_flag) = register_job();
-    let _job_guard = JobGuard(job_id);
-    let start = Instant::now();
-
-    sink.add(GenerationEvent::Text {
-        job_id,
-        text: String::new(),
-        token_id: None,
-    });
-
     let max_tokens = max_tokens.unwrap_or(DEFAULT_GENERATION_MAX_TOKENS);
     let max_tokens = usize::try_from(max_tokens.max(0)).unwrap_or(0);
     let stop_sequences = stop_sequences.unwrap_or_default();
@@ -534,6 +523,7 @@ fn generate_chat_stream(
         stop_sequences: &stop_sequences,
         prompt_tokens: 0,
         generated_tokens: 0,
+        finish_reason: FinishReason::Unknown,
     };
 
     let result = match catch_unwind(AssertUnwindSafe(|| {
@@ -589,18 +579,7 @@ fn generate_chat_stream(
             };
 
             if image_paths.is_empty() {
-                let add_bos = should_add_bos(ctx.model, &prompt);
-                let prompt_tokens =
-                    ctx.model
-                        .str_to_token(&prompt, add_bos)
-                        .map_err(|err| Error::Llama {
-                            op: "Tokenize failed",
-                            message: err.to_string(),
-                        })?;
-
-                if prompt_tokens.is_empty() {
-                    return Err(Error::InvalidInput("Prompt produced no tokens".to_string()));
-                }
+                let prompt_tokens = tokenize_text_prompt(ctx.model, &prompt)?;
 
                 let n_ctx = ctx.n_ctx();
                 if prompt_tokens.len() as u32 > n_ctx {
@@ -662,7 +641,7 @@ fn generate_chat_stream(
                     token_offset = end;
                 }
 
-                let mut sampler = build_sampler(ctx.model, &sampler_request)?;
+                let mut sampler = build_sampler(ctx.model, &sampler_request, ctx.n_ctx() as i32)?;
                 sampler.accept_many(prompt_tokens.iter());
 
                 let pos = prompt_tokens.len() as i32;
@@ -688,9 +667,11 @@ fn generate_chat_stream(
                     });
                 }
                 let bitmap =
-                    MtmdBitmap::from_file(&mtmd_ctx, image_path).map_err(|err| Error::Llama {
-                        op: "Failed to load image",
-                        message: err.to_string(),
+                    MtmdBitmap::from_file(&mtmd_ctx, image_path, false).map_err(|err| {
+                        Error::Llama {
+                            op: "Failed to load image",
+                            message: err.to_string(),
+                        }
                     })?;
                 if bitmap.is_audio() {
                     return Err(Error::Unsupported("Audio inputs are not supported"));
@@ -699,7 +680,7 @@ fn generate_chat_stream(
             }
             let bitmap_refs = bitmaps.iter().collect::<Vec<_>>();
 
-            let add_special = matches!(should_add_bos(ctx.model, &prompt), AddBos::Always);
+            let add_special = should_add_bos(ctx.model, &prompt);
             let input_text = MtmdInputText {
                 text: prompt,
                 add_special,
@@ -749,7 +730,7 @@ fn generate_chat_stream(
                 })?;
             check_cancelled(&cancel_flag)?;
 
-            let mut sampler = build_sampler(ctx.model, &sampler_request)?;
+            let mut sampler = build_sampler(ctx.model, &sampler_request, ctx.n_ctx() as i32)?;
             let mut prompt_tokens = Vec::new();
             for index in 0..chunks.len() {
                 if let Some(chunk) = chunks.get(index)
@@ -778,11 +759,8 @@ fn generate_chat_stream(
         prompt_tokens: Some(job.prompt_tokens),
         generated_tokens: Some(job.generated_tokens),
         total_time_ms: Some(start.elapsed().as_millis() as i64),
+        finish_reason: job.finish_reason,
     };
-
-    sink.add(GenerationEvent::Done {
-        summary: summary.clone(),
-    });
 
     Ok(summary)
 }
@@ -824,6 +802,54 @@ mod tests {
         let step = decoder.push_bytes(&[0x99, 0x82]);
         assert_eq!(step.text.as_deref(), Some("🙂"));
         assert!(!step.stop);
+    }
+
+    #[test]
+    fn stop_sequences_are_withheld_across_stream_boundaries() {
+        for (pieces, stops, expected, stopped) in [
+            (
+                vec!["hello <", "END", "> ignored"],
+                vec!["<END>"],
+                "hello ",
+                true,
+            ),
+            (vec!["🙂é", "FIN rest"], vec!["éFIN"], "🙂", true),
+            (vec!["hello <EN"], vec!["<END>"], "hello <EN", false),
+            (vec!["hello <E", "lse"], vec!["<END>"], "hello <Else", false),
+            (
+                vec!["before STOP after END"],
+                vec!["END", "STOP"],
+                "before ",
+                true,
+            ),
+            (vec!["hello", " world"], vec![""], "hello world", false),
+            (
+                vec!["{\"fragment", "_start_byte\":0"],
+                vec!["{\"fragment_start_byte\":"],
+                "",
+                true,
+            ),
+        ] {
+            let mut decoder =
+                StreamDecoder::new(&stops.into_iter().map(str::to_owned).collect::<Vec<_>>());
+            let mut output = String::new();
+            let mut did_stop = false;
+            for piece in pieces {
+                let step = decoder.push_bytes(piece.as_bytes());
+                output.push_str(step.text.as_deref().unwrap_or(""));
+                if step.stop {
+                    did_stop = true;
+                    break;
+                }
+            }
+            if !did_stop {
+                let step = decoder.flush();
+                output.push_str(step.text.as_deref().unwrap_or(""));
+                did_stop = step.stop;
+            }
+            assert_eq!(output, expected);
+            assert_eq!(did_stop, stopped);
+        }
     }
 
     #[test]

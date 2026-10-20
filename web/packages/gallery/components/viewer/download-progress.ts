@@ -1,11 +1,8 @@
 import type { FileDownloadProgress } from "ente-gallery/services/download-core";
 import type { ItemData } from "./data-source-core";
 
-export type DownloadProgressPhase =
-    | "preparing"
-    | "downloading"
-    | "decrypting"
-    | "failed";
+type DownloadProgressPhase =
+    "preparing" | "downloading" | "decrypting" | "failed";
 
 export interface DownloadProgressState {
     phase: DownloadProgressPhase;

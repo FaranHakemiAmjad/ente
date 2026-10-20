@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -93,6 +94,7 @@ internal fun MessageList(
     modifier: Modifier,
     messages: List<ChatMessage>,
     streamingResponse: String,
+    preparationStatus: String?,
     streamingParentId: String?,
     isGenerating: Boolean,
     isModelDownloaded: Boolean,
@@ -329,6 +331,7 @@ internal fun MessageList(
                 item(key = "streaming") {
                     StreamingMessageBubble(
                         text = streamingResponse,
+                        preparationStatus = preparationStatus,
                         isGenerating = true,
                     )
                 }
@@ -339,6 +342,7 @@ internal fun MessageList(
             item(key = "streaming") {
                 StreamingMessageBubble(
                     text = streamingResponse,
+                    preparationStatus = preparationStatus,
                     isGenerating = true,
                 )
             }
@@ -902,9 +906,11 @@ private fun MessageActionsMenu(
 @Composable
 private fun StreamingMessageBubble(
     text: String,
+    preparationStatus: String?,
     isGenerating: Boolean,
 ) {
     var renderedText by remember { mutableStateOf(text) }
+    val latestText by rememberUpdatedState(text)
     var showCursor by remember { mutableStateOf(true) }
     val hasText = renderedText.isNotBlank()
     val shouldBlink = isGenerating && hasText
@@ -920,18 +926,17 @@ private fun StreamingMessageBubble(
         }
     }
 
-    LaunchedEffect(text, isGenerating) {
+    LaunchedEffect(isGenerating) {
         if (!isGenerating) {
             renderedText = ""
             return@LaunchedEffect
         }
-        if (text.isBlank()) {
-            renderedText = ""
-            return@LaunchedEffect
-        }
         // Throttle markdown re-rendering while streaming to reduce dropped frames.
-        delay(33)
-        renderedText = stripHiddenMessageParts(text)
+        snapshotFlow { latestText }
+            .collect { value ->
+                renderedText = stripHiddenMessageParts(value)
+                delay(33)
+            }
     }
 
     if (!isGenerating) return
@@ -952,7 +957,15 @@ private fun StreamingMessageBubble(
             )
         }
 
-        GeneratingDotsIndicator()
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(EnsuSpacing.sm.dp),
+        ) {
+            GeneratingDotsIndicator()
+            preparationStatus?.let {
+                Text(text = it, style = EnsuTypography.small, color = EnsuColor.textMuted())
+            }
+        }
     }
 }
 

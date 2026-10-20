@@ -1,4 +1,4 @@
-export interface LegacyUser {
+interface LegacyUser {
     id: number;
     email: string;
 }
@@ -7,11 +7,7 @@ export interface LegacyContactRecord {
     user: LegacyUser;
     emergencyContact: LegacyUser;
     state:
-        | "INVITED"
-        | "REVOKED"
-        | "ACCEPTED"
-        | "CONTACT_LEFT"
-        | "CONTACT_DENIED";
+        "INVITED" | "REVOKED" | "ACCEPTED" | "CONTACT_LEFT" | "CONTACT_DENIED";
     recoveryNoticeInDays: number;
 }
 

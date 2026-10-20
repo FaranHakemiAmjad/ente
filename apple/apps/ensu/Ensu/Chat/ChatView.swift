@@ -8,7 +8,9 @@ struct ChatView: View {
 
     @StateObject private var viewState = ChatViewState()
     @StateObject private var keyboard = KeyboardObserver()
-    @FocusState private var isInputFocused: Bool
+    @State private var showSourceIntroduction = false
+    @AppStorage("ensu.sources.introductionSeen") private var sourceIntroductionSeen = false
+    @State private var isInputFocused = false
 
     private var editingMessage: RenderedChatMessage? {
         guard let editingId = viewModel.editingMessageId else { return nil }
@@ -30,6 +32,19 @@ struct ChatView: View {
             && !viewState.isDrawerOpen
             && !viewState.didDismissKeyboard
             && !viewState.showSettings
+            && !showSourceIntroduction
+            && sourceIntroductionSeen
+    }
+
+    private var canShowSourceIntroduction: Bool {
+        !sourceIntroductionSeen && viewModel.isModelDownloaded && !viewModel.isDownloading
+            && !viewModel.isGenerating && !viewModel.isChatUnsupported && !viewState.isDrawerOpen
+            && !viewState.showSettings && !showSourceIntroduction
+            && viewState.pendingWhatsNew == nil
+    }
+
+    private var isChatActive: Bool {
+        scenePhase == .active && !viewState.showSettings && !showSourceIntroduction
     }
 
     private var overflowDialogPresented: Binding<Bool> {
@@ -43,8 +58,13 @@ struct ChatView: View {
         )
     }
 
-    private var modelSettingsSignature: String {
-        modelSettings.modelId
+    private var modelSettingsSignature: [String] {
+        [
+            modelSettings.modelId,
+            modelSettings.contextLength,
+            modelSettings.temperature,
+            modelSettings.systemPromptBody,
+        ]
     }
 
     private let drawerWidth: CGFloat = 320
@@ -135,9 +155,10 @@ struct ChatView: View {
                 handleToastTrigger(trigger)
             }
             .onChange(of: modelSettingsSignature) { _ in
-                viewModel.refreshModelDownloadInfo()
+                viewModel.modelSelectionChanged()
             }
             .onChange(of: scenePhase) { newValue in
+                viewModel.setAppForeground(newValue != .background)
                 viewModel.notesStore.setForeground(newValue == .active)
                 if newValue == .active {
                     viewModel.refreshModelDownloadInfo()
@@ -147,7 +168,19 @@ struct ChatView: View {
             }
         }
         .environmentObject(viewModel.notesStore)
-        .onAppear { viewModel.notesStore.setForeground(scenePhase == .active) }
+        .onAppear {
+            viewModel.setAppForeground(scenePhase != .background)
+            viewModel.notesStore.setForeground(scenePhase == .active)
+            viewModel.setChatActive(isChatActive)
+        }
+        .onChange(of: isChatActive) { viewModel.setChatActive($0) }
+        .onDisappear { viewModel.setChatActive(false) }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIApplication.didReceiveMemoryWarningNotification)
+        ) { _ in
+            viewModel.handleMemoryPressure()
+        }
         .sheet(isPresented: $viewState.showSettings) {
             SettingsView(
                 knowledgeStore: viewModel.knowledgeStore,
@@ -157,6 +190,17 @@ struct ChatView: View {
                     viewState.showSettings = false
                 }
             )
+        }
+        .sheet(isPresented: $showSourceIntroduction) {
+            SourceIntroductionSheet(
+                knowledgeStore: viewModel.knowledgeStore, notesStore: viewModel.notesStore)
+        }
+        .task(id: canShowSourceIntroduction) {
+            if canShowSourceIntroduction {
+                isInputFocused = false
+                showSourceIntroduction = true
+                sourceIntroductionSeen = true
+            }
         }
         .onChange(of: viewState.showSettings) { isPresented in
             if isPresented {
@@ -278,6 +322,7 @@ struct ChatView: View {
                     streamingResponse: viewModel.displayedStreamingResponse,
                     streamingParentId: viewModel.displayedStreamingParentId,
                     isGenerating: viewModel.isGenerating,
+                    conversationStatus: viewModel.conversationStatus,
                     sessionId: viewModel.currentSessionId,
                     keyboardHeight: keyboard.height,
                     inputBarHeight: (viewModel.isModelDownloaded || viewModel.isChatUnsupported)
@@ -307,12 +352,6 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .id(viewState.sessionTransitionId)
                 .transition(sessionTransition)
-                .onAppear {
-                    viewModel.autoStartModelDownloadIfNeeded()
-                }
-                .onChange(of: viewModel.messages.count) { _ in
-                    viewModel.autoStartModelDownloadIfNeeded()
-                }
                 .zIndex(0)
 
                 if viewModel.isChatUnsupported {
@@ -329,7 +368,9 @@ struct ChatView: View {
                     MessageInputView(
                         text: $viewModel.draftText,
                         attachments: $viewModel.draftAttachments,
+                        supportsImageAttachments: viewModel.supportsImageAttachments,
                         isGenerating: viewModel.isGenerating,
+                        isSendPending: viewModel.isSendPending,
                         isDownloading: viewModel.isDownloading,
                         editingMessage: editingMessage,
                         isProcessingAttachments: viewModel.isProcessingAttachments,

@@ -117,7 +117,6 @@ void main() {
 
       expect(await handoffFile.readAsString(), 'current cache bytes');
       expect(await staleLocalPath.readAsString(), 'stale local bytes');
-      expect(cacheRelativePath(handoffFile), startsWith('open_handoff'));
       expect(
         cacheRelativePath(handoffFile),
         startsWith(p.join('open_handoff', '321')),
@@ -196,6 +195,26 @@ void main() {
         expect(p.basename(source.path), '658.decrypted');
         expect(p.basename(handoffFile.path), 'Visible name.pdf');
         expect(await handoffFile.readAsString(), 'cached decrypted bytes');
+      },
+    );
+
+    test(
+      'opens a maximum-length extensionless name from the decrypted cache',
+      () async {
+        final displayName = 'a' * 255;
+        final file = lockerFile(uploadedFileID: 659, title: displayName);
+        final source = File(getCachedDecryptedFilePath(file));
+        await source.writeAsString('extensionless bytes');
+
+        final handoffFile = await FileUtil.prepareOpenFileForTest(
+          source,
+          displayName: displayName,
+          lockerFile: file,
+        );
+
+        expect(p.basename(source.path), '659.decrypted');
+        expect(p.basename(handoffFile.path), displayName);
+        expect(await handoffFile.readAsString(), 'extensionless bytes');
       },
     );
 

@@ -12,7 +12,7 @@ export interface SaveGroup {
     success: number;
     failed: number;
     canceller: AbortController;
-    failureReason?: "network_offline" | "file_error";
+    failureReason?: "network_offline" | "file_error" | "blob_creation_failed";
     includeZipNumber?: boolean;
     isDownloadingZip?: boolean;
     currentPart?: number;
@@ -45,7 +45,7 @@ export type UpdateSaveGroup = (
     tranform: (prev: SaveGroup) => SaveGroup,
 ) => void;
 
-export type RemoveSaveGroup = (saveGroup: SaveGroup) => void;
+type RemoveSaveGroup = (saveGroup: SaveGroup) => void;
 
 // Module state lets route remounts rehydrate in-progress downloads.
 type SaveGroupsListener = () => void;

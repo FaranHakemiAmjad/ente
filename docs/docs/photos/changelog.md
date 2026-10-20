@@ -7,6 +7,65 @@ description: Release notes of recent updates to Ente Photos mobile and desktop a
 
 A short summary list of changes to the Ente Photos mobile and desktop apps. For a more descriptive list with screenshots and blog post links, see the [news](https://ente.com/news).
 
+## v1.7.30 (desktop) - Oct 2026
+
+- Added slideshows for albums.
+- Updated All People to match the All Albums design - @vijayadithyanpj
+- Added a confirmation before closing file info with an unsaved description.
+- Fixed the photo viewer showing the wrong image after changing a photo's date.
+- Removed the redundant three-dot menu from Hidden items and moved the download button to the right - @vijayadithyanpj
+- Updated image processing on Windows and Linux with security and reliability fixes.
+- Fixed OpenStreetMap tiles not loading for some self-hosted users - @Himanshucodess
+- Improved desktop previews for RAF, ORF, PEF, NRW, and SRW camera RAW photos in Linux and Windows
+- Fixed TB storage usage rounding.
+- Preserve HDR gain maps in Ultra HDR JPEG thumbnails generated on Windows and Linux.
+- Fixed the "View logs" button hanging on Linux instead of dismissing once the file manager opened - @aswinpradeepc
+- Added download progress and a retry option when loading photos and videos in the viewer.
+- Fixed low-resolution videos appearing too small in the viewer.
+
+## v1.3.65 (mobile) - Oct 2026
+
+- Redesigned album sharing and made sharing with multiple people faster.
+- Improved sharing suggestions, contact scrolling, and empty states. Fixed recipient removal during animations and prevented searches with no matches from collapsing the sharing sheet.
+- Improved album link settings with clearer labels and grouped options.
+- Refreshed the Add person picker and fixed overflowing name labels.
+- Added the option to remove photos from albums, quick links, and Favorites directly from the file info sheet.
+- Updated the keyboard to use sentence capitalization when naming a new album.
+- Improved the album picker layout while searching with the keyboard open.
+- Fixed album auto-add missing photos after first setup or when person matches become available during sync, including background sync with local indexing disabled.
+- Kept the loading dialog visible until album auto-add finishes updating.
+- Fixed date handling in On This Day and birthday Memories around year changes and daylight saving transitions.
+- Fixed face previews failing to load when local photo files become unavailable.
+- Fixed search getting stuck after a failed search.
+- Fixed menu colors not updating when switching between light and dark themes.
+- Removed the favorite action when viewing photos through public links.
+- Fixed family setup for self-hosted accounts.
+- Fixed duplicate shared photos appearing on the map after being favorited.
+- Improved app responsiveness while backing up videos.
+- Improved Uncategorized cleanup feedback and loading.
+
+## v1.3.64 (mobile) - Sep 2026
+
+- Added a thumbnail filmstrip for quickly previewing and navigating nearby photos and videos in the gallery viewer.
+- Added support for sharing photos from person pages.
+- Set photos as your home screen, lock screen, or both wallpapers on Android, with a preview to adjust the crop.
+- Added press and hold 2x playback for videos (@fosszil)
+- Gallery scrolling performance improvements.
+- Made back buttons easier to tap without changing their appearance or spacing.
+- Fixed device storage buildup caused by temporary Live Photo videos left behind during backup on iOS.
+- Create albums from unmatched album searches.
+- Added Slideshow to on-device albums.
+- Added longer slideshow duration options.
+- Show archived albums in Albums search results.
+- Show person-aware avatars in the file details "Added by" row when the uploader resolves to a person.
+- Updated the People menu to match the current Photos interface.
+- Updated the person cover photo picker to match the current Photos interface.
+- Updated the person picker app bar and sort menu, and fixed overflowing person names.
+- Fixed uploaded photos appearing as not uploaded after signing back in on iOS.
+- Fixed panoramas appearing upside down on some Android devices.
+- Fixed image and video viewer status bar styles. (@r4khul)
+- Show load errors for Referrals and Cast sessions.
+
 ## v1.7.29 (desktop) - Sep 2026
 
 - New accounts now select storage plan before entering their gallery.

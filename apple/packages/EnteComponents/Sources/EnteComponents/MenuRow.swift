@@ -1,25 +1,25 @@
 import SwiftUI
 
-public struct MenuRow: View {
+public struct MenuRow<Leading: View>: View {
     @Environment(\.entePalette) private var palette
     private let title: String
     private let subtitle: String?
-    private let image: Image?
-    private let selected: Bool?
+    private let leading: Leading?
+    private let selected: Bool
     private let showsChevron: Bool
     private let action: () -> Void
 
     public init(
         _ title: String,
         subtitle: String? = nil,
-        image: Image? = nil,
-        selected: Bool? = nil,
+        @ViewBuilder leading: () -> Leading,
+        selected: Bool = false,
         showsChevron: Bool = false,
         action: @escaping () -> Void
     ) {
         self.title = title
         self.subtitle = subtitle
-        self.image = image
+        self.leading = leading()
         self.selected = selected
         self.showsChevron = showsChevron
         self.action = action
@@ -28,9 +28,8 @@ public struct MenuRow: View {
     public var body: some View {
         Button(action: action) {
             HStack(spacing: EnteSpacing.md) {
-                if let image {
-                    image.resizable().scaledToFit()
-                        .frame(width: 18, height: 18)
+                if let leading {
+                    leading
                         .frame(width: 36, height: 36)
                         .foregroundStyle(palette.mutedText)
                         .accessibilityHidden(true)
@@ -47,17 +46,17 @@ public struct MenuRow: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if selected == true || showsChevron {
+                if selected || showsChevron {
                     HStack(spacing: EnteSpacing.xs) {
-                        if selected == true {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 24))
+                        if selected {
+                            Glyph.check.image.resizable().scaledToFit()
+                                .frame(width: 24, height: 24)
                                 .foregroundStyle(palette.primary)
                         }
                         if showsChevron {
-                            Image(systemName: "chevron.forward")
-                                .font(.system(size: 18))
+                            Glyph.chevron.image.resizable().scaledToFit()
                                 .frame(width: 24, height: 24)
+                                .flipsForRightToLeftLayoutDirection(true)
                                 .foregroundStyle(palette.mutedText)
                         }
                     }
@@ -65,14 +64,31 @@ public struct MenuRow: View {
                     .accessibilityHidden(true)
                 }
             }
-            .padding(.leading, image == nil ? EnteSpacing.lg : EnteSpacing.md)
+            .padding(.leading, leading == nil ? EnteSpacing.lg : EnteSpacing.md)
             .padding(.trailing, EnteSpacing.md)
             .padding(.vertical, 9)
             .frame(minHeight: 58)
             .contentShape(Rectangle())
         }
         .buttonStyle(MenuRowStyle())
-        .accessibilityAddTraits(selected == true ? .isSelected : [])
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+public extension MenuRow where Leading == EmptyView {
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        selected: Bool = false,
+        showsChevron: Bool = false,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        leading = nil
+        self.selected = selected
+        self.showsChevron = showsChevron
+        self.action = action
     }
 }
 

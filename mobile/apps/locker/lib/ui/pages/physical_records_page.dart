@@ -59,12 +59,12 @@ class _PhysicalRecordsPageState
       return context.strings.physicalRecords;
     }
 
-    final controllerName = _nameController.text.trim();
+    final controllerName = _nameController.text;
     if (controllerName.isNotEmpty) {
       return controllerName;
     }
 
-    final dataName = (currentData?.name ?? '').trim();
+    final dataName = currentData?.name ?? '';
     if (dataName.isNotEmpty) {
       return dataName;
     }
@@ -80,25 +80,22 @@ class _PhysicalRecordsPageState
 
   @override
   bool validateForm() {
-    return _nameController.text.trim().isNotEmpty &&
-        _locationController.text.trim().isNotEmpty;
+    return _nameController.text.isNotEmpty;
   }
 
   @override
   bool get hasUnsavedChanges {
-    return _nameController.text.trim() != _initialName.trim() ||
-        _locationController.text.trim() != _initialLocation.trim() ||
-        _notesController.text.trim() != _initialNotes.trim();
+    return _nameController.text != _initialName ||
+        _locationController.text != _initialLocation ||
+        _notesController.text != _initialNotes;
   }
 
   @override
   PhysicalRecordData createInfoData() {
     return PhysicalRecordData(
-      name: _nameController.text.trim(),
-      location: _locationController.text.trim(),
-      notes: _notesController.text.trim().isEmpty
-          ? null
-          : _notesController.text.trim(),
+      name: _nameController.text,
+      location: _locationController.text,
+      notes: _notesController.text.isEmpty ? null : _notesController.text,
     );
   }
 
@@ -120,7 +117,6 @@ class _PhysicalRecordsPageState
         label: context.strings.recordLocation,
         hintText: context.strings.recordLocationHint,
         controller: _locationController,
-        isRequired: true,
         textCapitalization: TextCapitalization.sentences,
         textInputAction: TextInputAction.next,
         onChanged: (_) => onFieldChanged(),
@@ -141,22 +137,26 @@ class _PhysicalRecordsPageState
 
   @override
   List<Widget> buildViewFields() {
-    final fields = <Widget>[
-      buildViewField(
-        label: context.strings.recordLocation,
-        value: _locationController.text,
-      ),
-    ];
+    final fields = <Widget>[];
 
-    if (_notesController.text.trim().isNotEmpty) {
-      fields.addAll([
-        const SizedBox(height: 24),
+    if (_locationController.text.isNotEmpty) {
+      fields.add(
+        buildViewField(
+          label: context.strings.recordLocation,
+          value: _locationController.text,
+        ),
+      );
+    }
+
+    if (_notesController.text.isNotEmpty) {
+      if (fields.isNotEmpty) fields.add(const SizedBox(height: 24));
+      fields.add(
         buildViewField(
           label: context.strings.recordNotes,
           value: _notesController.text,
           maxLines: 6,
         ),
-      ]);
+      );
     }
 
     return fields;

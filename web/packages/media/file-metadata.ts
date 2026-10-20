@@ -143,8 +143,7 @@ export const fileCreationPhotoSortTime = (file: EnteFile) =>
 
 export const fileLocation = (file: EnteFile): Location | undefined => {
     const { lat, long } = file.pubMagicMetadata?.data ?? {};
-    // Use (lat, long) only if both are present and nonzero.
-    const edited = lat && long;
+    const edited = lat != null && long != null;
 
     const latitude = nullToUndefined(edited ? lat : file.metadata.latitude);
     const longitude = nullToUndefined(edited ? long : file.metadata.longitude);
@@ -170,14 +169,6 @@ export const fileCameraModel = (file: EnteFile): string | undefined => {
     const model = rawModel.trim();
     if (model.length === 0) return undefined;
     return model;
-};
-
-export const fileCameraLabel = (file: EnteFile): string | undefined => {
-    const make = fileCameraMake(file);
-    const model = fileCameraModel(file);
-    if (!make && !model) return undefined;
-    if (make && model) return `${make} ${model}`;
-    return model ?? make;
 };
 
 export const fileDurationString = (file: EnteFile): string | undefined => {
@@ -251,9 +242,7 @@ export const parseMetadataDate = (
 
 const dropLast = (s: string) => (s ? s.substring(0, s.length - 1) : s);
 
-export const createPhotoDate = (
-    dateLike: ParsedMetadataDate | string | number,
-) => {
+const createPhotoDate = (dateLike: ParsedMetadataDate | string | number) => {
     switch (typeof dateLike) {
         case "object":
             return new Date(dateLike.dateTime);

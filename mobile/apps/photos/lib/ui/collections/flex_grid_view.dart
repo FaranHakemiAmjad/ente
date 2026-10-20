@@ -179,9 +179,11 @@ class _CollectionsFlexiGridViewWidgetState
       context,
       CollectionPage(
         tagPrefix: tagPrefix,
+        coverHeroTag: tagPrefix,
         CollectionWithThumbnail(c, thumbnail),
         hasVerifiedLock: hasVerifiedLock,
       ),
+      useFadeTransition: true,
     );
   }
 
@@ -198,6 +200,7 @@ class _CollectionsFlexiGridViewWidgetState
       await routeToPage(
         context,
         CollectionPage(CollectionWithThumbnail(result, null)),
+        useFadeTransition: true,
       );
     } else {
       await showGenericErrorDialog(context: context, error: result);
@@ -389,7 +392,7 @@ class _CreateAlbumBottomSheetState extends State<_CreateAlbumBottomSheet> {
         hintText: strings.enterAlbumName,
         autofocus: true,
         isClearable: true,
-        textCapitalization: TextCapitalization.words,
+        textCapitalization: TextCapitalization.sentences,
         onSubmit: (_) => _createAlbum(),
         onChanged: (_) {
           final hasAlbumName = _controller.text.trim().isNotEmpty;

@@ -1,9 +1,6 @@
 import Foundation
 
-// Compared against the memory the OS reports (ProcessInfo.physicalMemory), which runs
-// well below marketed RAM. 3.2 GB sits in the gap between 3 GB devices (~2.7-3.0 GB
-// reported) and 4 GB devices (~3.4-3.8 GB reported), so 4 GB devices pass and 3 GB don't.
-let chatMinimumRAMBytes: UInt64 = 3_200_000_000
+let chatMinimumRAMBytes: UInt64 = 1_600_000_000
 
 enum ChatDeviceCapability: Equatable {
     case supported(totalMemoryBytes: UInt64?)
@@ -30,7 +27,11 @@ enum ChatDeviceCapability: Equatable {
 }
 
 func currentChatDeviceCapability() -> ChatDeviceCapability {
-    let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+    chatDeviceCapability(totalMemoryBytes: ProcessInfo.processInfo.physicalMemory)
+}
+
+func chatDeviceCapability(totalMemoryBytes: UInt64) -> ChatDeviceCapability {
+    guard totalMemoryBytes > 0 else { return .unknown }
     if totalMemoryBytes < chatMinimumRAMBytes {
         return .unsupportedLowMemory(
             totalMemoryBytes: totalMemoryBytes,
@@ -58,9 +59,6 @@ final class ModelSettingsStore: ObservableObject {
     @Published var contextLength: String {
         didSet { persist() }
     }
-    @Published var maxTokens: String {
-        didSet { persist() }
-    }
     @Published var temperature: String {
         didSet { persist() }
     }
@@ -73,22 +71,20 @@ final class ModelSettingsStore: ObservableObject {
     private init() {
         self.modelId = defaults.string(forKey: Keys.modelId) ?? ""
         self.contextLength = defaults.string(forKey: Keys.contextLength) ?? ""
-        self.maxTokens = defaults.string(forKey: Keys.maxTokens) ?? ""
         self.temperature = defaults.string(forKey: Keys.temperature) ?? ""
         self.systemPromptBody = defaults.string(forKey: Keys.systemPromptBody) ?? ""
+        defaults.removeObject(forKey: Keys.legacyMaxTokens)
     }
 
-    func saveModel(id: String, contextLength: String, maxTokens: String, temperature: String) {
+    func saveModel(id: String, contextLength: String, temperature: String) {
         modelId = id
         self.contextLength = contextLength
-        self.maxTokens = maxTokens
         self.temperature = temperature
     }
 
     func resetToDefault() {
         modelId = ""
         contextLength = ""
-        maxTokens = ""
         temperature = ""
     }
 
@@ -100,8 +96,7 @@ final class ModelSettingsStore: ObservableObject {
         )
         return LlmModelSelection(
             id: modelId,
-            contextLength: Int(contextLength),
-            maxTokens: Int(maxTokens).flatMap { $0 > 0 ? $0 : nil }
+            contextLength: Int(contextLength)
         )
     }
 
@@ -129,7 +124,6 @@ final class ModelSettingsStore: ObservableObject {
     private func persist() {
         defaults.set(modelId, forKey: Keys.modelId)
         defaults.set(contextLength, forKey: Keys.contextLength)
-        defaults.set(maxTokens, forKey: Keys.maxTokens)
         defaults.set(temperature, forKey: Keys.temperature)
         defaults.set(systemPromptBody, forKey: Keys.systemPromptBody)
     }
@@ -137,7 +131,7 @@ final class ModelSettingsStore: ObservableObject {
     fileprivate enum Keys {
         static let modelId = "ensu.model.id"
         static let contextLength = "ensu.model.context"
-        static let maxTokens = "ensu.model.max_tokens"
+        static let legacyMaxTokens = "ensu.model.max_tokens"
         static let temperature = "ensu.model.temperature"
         static let systemPromptBody = "ensu.model.system_prompt_body"
     }

@@ -360,17 +360,15 @@ func (repo *UserRepository) GetUserIDWithEmailUnrestricted(email string) (int64,
 }
 
 func (repo *UserRepository) GetKeyAttributes(userID int64) (ente.KeyAttributes, error) {
-	row := repo.DB.QueryRow(`SELECT kek_salt, kek_hash_bytes, encrypted_key, key_decryption_nonce, public_key, encrypted_secret_key, secret_key_decryption_nonce, mem_limit, ops_limit, master_key_encrypted_with_recovery_key, master_key_decryption_nonce, recovery_key_encrypted_with_master_key, recovery_key_decryption_nonce FROM key_attributes WHERE user_id = $1`, userID)
+	row := repo.DB.QueryRow(`SELECT kek_salt, encrypted_key, key_decryption_nonce, public_key, encrypted_secret_key, secret_key_decryption_nonce, mem_limit, ops_limit, master_key_encrypted_with_recovery_key, master_key_decryption_nonce, recovery_key_encrypted_with_master_key, recovery_key_decryption_nonce FROM key_attributes WHERE user_id = $1`, userID)
 	var (
 		keyAttributes                     ente.KeyAttributes
-		kekHashBytes                      []byte
 		masterKeyEncryptedWithRecoveryKey sql.NullString
 		masterKeyDecryptionNonce          sql.NullString
 		recoveryKeyEncryptedWithMasterKey sql.NullString
 		recoveryKeyDecryptionNonce        sql.NullString
 	)
 	err := row.Scan(&keyAttributes.KEKSalt,
-		&kekHashBytes,
 		&keyAttributes.EncryptedKey,
 		&keyAttributes.KeyDecryptionNonce,
 		&keyAttributes.PublicKey,
@@ -386,7 +384,6 @@ func (repo *UserRepository) GetKeyAttributes(userID int64) (ente.KeyAttributes, 
 	if err != nil {
 		return ente.KeyAttributes{}, stacktrace.Propagate(err, "")
 	}
-	keyAttributes.KEKHash = string(kekHashBytes)
 	if masterKeyEncryptedWithRecoveryKey.Valid {
 		keyAttributes.MasterKeyEncryptedWithRecoveryKey = masterKeyEncryptedWithRecoveryKey.String
 	}
@@ -404,8 +401,8 @@ func (repo *UserRepository) GetKeyAttributes(userID int64) (ente.KeyAttributes, 
 }
 
 func (repo *UserRepository) SetKeyAttributes(userID int64, keyAttributes ente.KeyAttributes) error {
-	_, err := repo.DB.Exec(`INSERT INTO key_attributes(user_id, kek_salt, kek_hash_bytes, encrypted_key, key_decryption_nonce, public_key, encrypted_secret_key, secret_key_decryption_nonce, mem_limit, ops_limit, master_key_encrypted_with_recovery_key, master_key_decryption_nonce, recovery_key_encrypted_with_master_key, recovery_key_decryption_nonce) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-		userID, keyAttributes.KEKSalt, []byte(keyAttributes.KEKHash),
+	_, err := repo.DB.Exec(`INSERT INTO key_attributes(user_id, kek_salt, encrypted_key, key_decryption_nonce, public_key, encrypted_secret_key, secret_key_decryption_nonce, mem_limit, ops_limit, master_key_encrypted_with_recovery_key, master_key_decryption_nonce, recovery_key_encrypted_with_master_key, recovery_key_decryption_nonce) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		userID, keyAttributes.KEKSalt,
 		keyAttributes.EncryptedKey, keyAttributes.KeyDecryptionNonce,
 		keyAttributes.PublicKey, keyAttributes.EncryptedSecretKey,
 		keyAttributes.SecretKeyDecryptionNonce, keyAttributes.MemLimit, keyAttributes.OpsLimit,
@@ -477,7 +474,7 @@ func (repo *UserRepository) GetUsersWithIndividualPlanWhoHaveExceededStorageQuot
 
 func (repo *UserRepository) GetUsersWhoUpgradedNDaysAgo(days int) ([]ente.User, error) {
 	rows, err := repo.DB.Query(`
-        SELECT u.user_id, u.encrypted_email, u.email_decryption_nonce, u.email_hash, u.creation_time 
+        SELECT u.user_id, u.encrypted_email, u.email_decryption_nonce, u.email_hash, u.creation_time, u.family_admin_id
         FROM users u
         INNER JOIN subscriptions s ON u.user_id = s.user_id
         WHERE s.upgraded_at >= $1 AND s.upgraded_at < $2 AND u.encrypted_email IS NOT NULL`,
@@ -490,7 +487,7 @@ func (repo *UserRepository) GetUsersWhoUpgradedNDaysAgo(days int) ([]ente.User, 
 	for rows.Next() {
 		var user ente.User
 		var encryptedEmail, nonce []byte
-		err := rows.Scan(&user.ID, &encryptedEmail, &nonce, &user.Hash, &user.CreationTime)
+		err := rows.Scan(&user.ID, &encryptedEmail, &nonce, &user.Hash, &user.CreationTime, &user.FamilyAdminID)
 		if err != nil {
 			return nil, stacktrace.Propagate(err, "")
 		}

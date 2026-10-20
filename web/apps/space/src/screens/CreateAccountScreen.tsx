@@ -180,6 +180,7 @@ const TextInput: React.FC<TextInputProps> = ({
 }) => {
     const inputID = useId();
     const [showPassword, setShowPassword] = useState(false);
+    const [visibilityStatus, setVisibilityStatus] = useState("");
     const isPassword = type == "password";
 
     return (
@@ -257,9 +258,16 @@ const TextInput: React.FC<TextInputProps> = ({
                     <Box
                         component="button"
                         type="button"
-                        aria-label="Show password"
-                        aria-pressed={showPassword}
-                        onClick={() => setShowPassword((value) => !value)}
+                        aria-label={
+                            showPassword ? "Hide password" : "Show password"
+                        }
+                        aria-controls={inputID}
+                        onClick={() => {
+                            setShowPassword(!showPassword);
+                            setVisibilityStatus(
+                                `${label} is ${showPassword ? "hidden" : "visible"}`,
+                            );
+                        }}
                         sx={{
                             alignItems: "center",
                             bgcolor: "transparent",
@@ -284,6 +292,9 @@ const TextInput: React.FC<TextInputProps> = ({
                     </Box>
                 )}
             </Box>
+            {isPassword && (
+                <SpaceLiveStatus>{visibilityStatus}</SpaceLiveStatus>
+            )}
         </Box>
     );
 };
@@ -366,7 +377,8 @@ export const CreateAccountScreen: React.FC<CreateAccountScreenProps> = ({
                     minHeight: "100svh",
                     mx: "auto",
                     pb: "154px",
-                    px: 3,
+                    pl: "max(24px, var(--space-ios-safe-area-left, 0px))",
+                    pr: "max(24px, var(--space-ios-safe-area-right, 0px))",
                     width: "100%",
                     "@media (min-width: 600px)": { maxWidth: 390 },
                 }}
@@ -377,7 +389,7 @@ export const CreateAccountScreen: React.FC<CreateAccountScreenProps> = ({
                         display: "grid",
                         gridTemplateColumns: `${spaceTouchTargetSize}px 1fr ${spaceTouchTargetSize}px`,
                         height: spaceTouchTargetSize,
-                        mt: "32px",
+                        mt: "calc(32px + var(--space-ios-safe-area-top, 0px))",
                         width: "100%",
                     }}
                 >

@@ -92,6 +92,7 @@ const kBGProcessingTaskMLLockWaitIOS = Duration(seconds: 60);
 const kBGTaskMLSelfStopAndroid = Duration(minutes: 9);
 const kBGProcessingTaskMLSelfStopAndroid = Duration(minutes: 8);
 bool isProcessBg = true;
+bool isIOSBackgroundRefresh = false;
 bool _stopHearBeat = false;
 bool _isSyncInitialized = false;
 bool _isRustInitialized = false;
@@ -248,22 +249,22 @@ Future<void> runBackgroundTask(
   String taskId,
   TimeLogger tlog, {
   String mode = 'normal',
-  Duration? mlSelfStop,
+  required Duration? mlSelfStop,
   Duration? mlLockWait,
   MlRunControl? control,
+  bool Function()? shouldStop,
 }) async {
+  isIOSBackgroundRefresh =
+      Platform.isIOS && taskId == BgTaskUtils.iOSBackgroundAppRefreshTask;
   // Created at task start so a stop that fires before ML begins stays
   // latched for the whole task.
   final mlRunControl = control ?? MlRunControl();
-  final mlBudget =
-      mlSelfStop ??
-      (Platform.isIOS ? kBGTaskMLSelfStopIOS : kBGTaskMLSelfStopAndroid);
-  if (mlBudget <= Duration.zero) {
+  if (mlSelfStop != null && mlSelfStop <= Duration.zero) {
     mlRunControl.requestStop(MlStopReason.backgroundDeadline);
   }
-  final mlSelfStopTimer = mlBudget > Duration.zero
+  final mlSelfStopTimer = mlSelfStop != null && mlSelfStop > Duration.zero
       ? Timer(
-          mlBudget,
+          mlSelfStop,
           () => mlRunControl.requestStop(MlStopReason.backgroundDeadline),
         )
       : null;
@@ -290,7 +291,7 @@ Future<void> runBackgroundTask(
       "[BG TASK] No recent foreground activity, proceeding with background work",
     );
 
-    await _runMinimally(taskId, tlog, mlRunControl, mlLockWait);
+    await _runMinimally(taskId, tlog, mlRunControl, mlLockWait, shouldStop);
   } finally {
     mlSelfStopTimer?.cancel();
     mlForegroundWatchTimer.cancel();
@@ -302,8 +303,10 @@ Future<void> _runMinimally(
   TimeLogger tlog,
   MlRunControl mlRunControl,
   Duration? mlLockWait,
+  bool Function()? shouldStop,
 ) async {
   try {
+    if (shouldStop?.call() ?? false) return;
     final PackageInfo packageInfo = await PackageInfo.fromPlatform();
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     await _scheduleHeartBeat(prefs, true);
@@ -357,33 +360,45 @@ Future<void> _runMinimally(
     SocialNotificationCoordinator.instance.init(prefs);
     await NotificationService.instance.initializeForBackground();
 
+    if (shouldStop?.call() ?? false) return;
     _logger.info("[BG TASK] update notification");
     updateService.showUpdateNotification().ignore();
     _logger.info("[BG TASK] sync starting");
     await _sync('bgTaskActiveProcess');
     _logger.info("[BG TASK] sync completed");
 
+    if (shouldStop?.call() ?? false) return;
     _logger.info("[BG TASK] locale fetch");
     final locale = await getLocale();
     await initializeDateFormatting(locale?.languageCode ?? "en");
     _logger.info("[BG TASK] home widget sync");
-    if (!isLocalGalleryMode &&
-        hasGrantedMLConsent &&
-        localSettings.isMLLocalIndexingEnabled) {
-      PersonService.init(entityService, MLDataDB.instance, prefs);
-      _logger.info(
-        "[BG TASK] person service initialized for memories recompute",
-      );
-      // The DiffSyncCompleteEvent fired during _sync predates PersonService
-      // init in this isolate, so sync explicitly before consuming person data.
+    if (!isLocalGalleryMode && hasGrantedMLConsent) {
       try {
-        await PersonService.instance.sync();
+        final userID = Configuration.instance.getUserID();
+        if (localSettings.isMLLocalIndexingEnabled ||
+            (await smartAlbumsService.getSmartConfigs()).values.any(
+              (config) =>
+                  config.personIDs.isNotEmpty &&
+                  userID != null &&
+                  (CollectionsService.instance
+                          .getCollectionByID(config.collectionId)
+                          ?.canAutoAdd(userID) ??
+                      false),
+            )) {
+          PersonService.init(entityService, MLDataDB.instance, prefs);
+          _logger.info(
+            "[BG TASK] person service initialized for background sync",
+          );
+          await PersonService.instance.sync();
+        }
       } catch (e, s) {
         _logger.warning("[BG TASK] person sync failed", e, s);
       }
     }
+    if (shouldStop?.call() ?? false) return;
     await _homeWidgetSync(true);
 
+    if (shouldStop?.call() ?? false) return;
     if ((isLocalGalleryMode || flagService.enableMLInBackground) &&
         hasGrantedMLConsent) {
       await controller.init();
@@ -396,9 +411,12 @@ Future<void> _runMinimally(
         try {
           PersonService.init(entityService, MLDataDB.instance, prefs);
           await MLService.instance.init();
+          if (shouldStop?.call() ?? false) return;
           final disposition = await MLService.instance.runAllML(
             force: false,
+            remoteSyncOnly: isIOSBackgroundRefresh,
             allowImageIndexing: BgTaskUtils.allowsImageIndexing(taskId),
+            maxFilesToIndex: BgTaskUtils.isRefreshTask(taskId) ? 100 : null,
             control: mlRunControl,
             lockWait: mlLockWait,
           );
@@ -408,7 +426,11 @@ Future<void> _runMinimally(
         }
       }
     }
+    if (shouldStop?.call() ?? false) return;
     _logger.info("[BG TASK] smart albums sync");
+    if (hasGrantedMLConsent && !PersonService.isInitialized) {
+      PersonService.init(entityService, MLDataDB.instance, prefs);
+    }
     await smartAlbumsService.syncSmartAlbums();
 
     _logger.info("[BG TASK] $taskId completed");
@@ -472,6 +494,9 @@ Future<void> _init(
       packageInfo,
     );
 
+    if (!isBackground) {
+      await localSettings.migrateGalleryLayoutPreferences();
+    }
     MLDataDB.initialize(
       preferRust: flagService.rustMlDb || localSettings.rustMlDbOverride,
     );
@@ -535,6 +560,7 @@ Future<void> _init(
     RemoteSyncService.instance.init(preferences);
     _logger.info("RemoteFileMLService done $tlog");
 
+    PersonService.init(entityService, MLDataDB.instance, preferences);
     _logger.info("SyncService init $tlog");
     await SyncService.instance.init(preferences);
     _isSyncInitialized = true;
@@ -557,14 +583,9 @@ Future<void> _init(
       await _scheduleFGHomeWidgetSync();
     }
 
-    if (Platform.isIOS) {
-      PushService.instance
-          .init(onBackgroundPush: _handleBackgroundPush)
-          .ignore();
-    }
+    PushService.instance.init(onBackgroundPush: _handleBackgroundPush).ignore();
     _logger.info("PushService/HomeWidget done $tlog");
     unawaited(MLService.instance.init());
-    PersonService.init(entityService, MLDataDB.instance, preferences);
     try {
       await PersonService.instance.refreshPersonCache();
     } catch (e, s) {

@@ -6,15 +6,15 @@ import {
 import { SpaceBottomSheetTransition } from "components/BottomSheetTransition";
 import React from "react";
 import {
+    spaceControlBackgroundHover,
+    spaceDanger,
     spaceDialogBackground,
     spaceOnAccent,
-    spaceSurface,
     spaceText,
     spaceTextMuted,
 } from "styles/colors";
 
 const green = "#08C225";
-const dangerColor = "#F63A3A";
 const textBase = spaceText;
 
 interface ConfirmationActionSheetProps {
@@ -41,7 +41,7 @@ export const ConfirmationActionSheet: React.FC<
     title,
     description,
     confirmLabel,
-    confirmBackgroundColor = dangerColor,
+    confirmBackgroundColor = spaceDanger,
     confirmClassName,
     confirmActionPhase = null,
     confirmDisabled = false,
@@ -118,6 +118,7 @@ export const ConfirmationActionSheet: React.FC<
                         m: 0,
                         px: "20px",
                         textAlign: "center",
+                        textWrap: "balance",
                     }}
                 >
                     {title}
@@ -132,6 +133,7 @@ export const ConfirmationActionSheet: React.FC<
                             mt: "8px",
                             px: "20px",
                             textAlign: "center",
+                            textWrap: "balance",
                         }}
                     >
                         {description}
@@ -156,8 +158,8 @@ export const ConfirmationActionSheet: React.FC<
                     />
                     <SheetButton
                         label={cancelLabel}
-                        backgroundColor={spaceSurface}
-                        color={spaceTextMuted}
+                        backgroundColor={spaceControlBackgroundHover}
+                        color={spaceText}
                         disabled={cancelDisabled}
                         onClick={onCancel}
                     />
@@ -165,7 +167,7 @@ export const ConfirmationActionSheet: React.FC<
                         <Box
                             role="alert"
                             sx={{
-                                color: dangerColor,
+                                color: spaceDanger,
                                 fontFamily:
                                     '"Inter Variable", Inter, sans-serif',
                                 fontSize: 13,

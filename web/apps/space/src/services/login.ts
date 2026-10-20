@@ -67,8 +67,7 @@ export type SpaceLoginResult =
       };
 
 export type SpaceLoginPasskeyStatusResult =
-    | SpaceLoginResult
-    | { status: "pending" };
+    SpaceLoginResult | { status: "pending" };
 
 let pendingSpaceLoginCredentials: SpaceLoginInput | undefined;
 
@@ -79,9 +78,7 @@ const deriveLoginKEK = (
     { kekSalt, memLimit, opsLimit }: LoginKDFAttributes,
 ) => deriveKey(password, kekSalt, opsLimit, memLimit);
 
-export const savePendingSpaceLoginCredentials = (
-    credentials: SpaceLoginInput,
-) => {
+const savePendingSpaceLoginCredentials = (credentials: SpaceLoginInput) => {
     pendingSpaceLoginCredentials = {
         email: cleanedEmail(credentials.email),
         password: credentials.password,
@@ -95,7 +92,7 @@ export const savedPendingSpaceLoginCredentials = () =>
             : undefined,
     );
 
-export const clearPendingSpaceLoginCredentials = () => {
+const clearPendingSpaceLoginCredentials = () => {
     pendingSpaceLoginCredentials = undefined;
 };
 

@@ -85,7 +85,8 @@ export const SpaceAboutButton: React.FC<
                     sx={{
                         flexShrink: 0,
                         pt: "calc(10px + env(safe-area-inset-top))",
-                        px: 2,
+                        pl: "max(16px, var(--space-ios-safe-area-left, 0px))",
+                        pr: "max(16px, var(--space-ios-safe-area-right, 0px))",
                     }}
                 >
                     <Box
@@ -116,7 +117,6 @@ export const SpaceAboutButton: React.FC<
                                 ml: "-12px",
                                 p: 0,
                                 width: 44,
-                                "&:hover": { bgcolor: "rgba(0, 0, 0, 0.06)" },
                                 "&:focus-visible": {
                                     outline: "2px solid black",
                                     outlineOffset: 3,

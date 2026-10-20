@@ -3,12 +3,8 @@ import { LoadingButton } from "ente-base/components/mui/LoadingButton";
 import { isSxArray } from "ente-base/components/utils/sx";
 import React from "react";
 
-export type ActionButtonType =
-    | "primary"
-    | "secondary"
-    | "critical"
-    | "tertiaryCritical"
-    | "link";
+type ActionButtonType =
+    "primary" | "secondary" | "critical" | "tertiaryCritical" | "link";
 
 interface ActionButtonProps extends Omit<ButtonProps, "color" | "variant"> {
     buttonType: ActionButtonType;

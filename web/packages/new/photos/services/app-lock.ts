@@ -128,9 +128,9 @@ const consumeAppLockRefreshSuppressionFromSession = () => {
     }
 };
 
-export type DeviceLockMode = "native";
+type DeviceLockMode = "native";
 
-export type DeviceLockFailureReason = "native-prompt-failed" | "unknown";
+type DeviceLockFailureReason = "native-prompt-failed" | "unknown";
 
 const logDeviceLockEvent = (
     phase: "setup" | "unlock",
@@ -151,7 +151,7 @@ const logDeviceLockEvent = (
     log.warn(message, { reason });
 };
 
-export const appLockCooldownDurationMs = (attemptCount: number): number => {
+const appLockCooldownDurationMs = (attemptCount: number): number => {
     // The lock screen and enforcement must use the same cooldown policy.
     if (attemptCount < cooldownStartsAtAttempt) return 0;
     return (
@@ -724,9 +724,7 @@ export const attemptUnlock = async (input: string): Promise<UnlockResult> => {
 };
 
 export type ReauthenticateWithAppLockResult =
-    | "authenticated"
-    | "cancelled"
-    | "fallback";
+    "authenticated" | "cancelled" | "fallback";
 
 export const reauthenticateWithAppLock =
     async (): Promise<ReauthenticateWithAppLockResult> => {

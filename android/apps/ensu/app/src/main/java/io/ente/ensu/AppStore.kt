@@ -3,7 +3,6 @@ package io.ente.ensu
 import android.content.Context
 import io.ente.ensu.assets.AssetStore
 import io.ente.ensu.bindings.ConfigDefaults
-import io.ente.ensu.bindings.Transcriber
 import io.ente.ensu.chat.Attachment
 import io.ente.ensu.chat.AttachmentStoreActions
 import io.ente.ensu.chat.ChatMessage
@@ -23,6 +22,7 @@ import io.ente.ensu.notes.NotesStore
 import io.ente.ensu.settings.DeveloperSettingsState
 import io.ente.ensu.settings.SessionPreferencesDataStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,15 +32,16 @@ class AppStore(
     context: Context,
     private val sessionPreferences: SessionPreferencesDataStore,
     chatRepository: ChatRepository,
-    llmProvider: LlmProvider,
+    val llmProvider: LlmProvider,
     knowledgeProvider: KnowledgeProvider,
     val assetStore: AssetStore,
-    val transcriber: Transcriber,
     private val deviceCapabilityProvider: AndroidDeviceCapabilityProvider,
     val configDefaults: ConfigDefaults,
     private val logRepository: FileLogRepository,
     clock: () -> Long = { System.currentTimeMillis() },
 ) {
+    private val sourcePreferences =
+        context.applicationContext.getSharedPreferences("ensu_chat_sources", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
@@ -58,7 +59,14 @@ class AppStore(
             logRepository = logRepository,
         )
     private val modelSettingsActions =
-        ModelSettingsActions(_state, sessionPreferences, llmProvider, logRepository)
+        ModelSettingsActions(
+            state = _state,
+            sessionPreferences = sessionPreferences,
+            llmProvider = llmProvider,
+            logRepository = logRepository,
+            notesStore = notesStore,
+            awaitKnowledgeReady = knowledgeStore::awaitReady,
+        )
     private val chatActions =
         ChatStoreActions(
             state = _state,
@@ -73,18 +81,37 @@ class AppStore(
             modelSettingsActions = modelSettingsActions,
             configDefaults = configDefaults,
             notesStore = notesStore,
-            awaitKnowledgeReady = knowledgeStore::awaitEnabledPacksReady,
+            awaitKnowledgeReady = knowledgeStore::awaitReady,
         )
 
     fun bootstrap(scope: CoroutineScope) {
         notesStore.bootstrap(scope)
         chatActions.setScope(scope)
-        modelSettingsActions.setScope(scope)
+        modelSettingsActions.bootstrap(scope)
         refreshDeviceCapability(scope)
         chatActions.bootstrap(scope)
         modelSettingsActions.refreshModelDownloadInfo()
         knowledgeStore.bootstrap(scope)
         _state.value = _state.value.copy(chat = _state.value.chat.copy(isModelStateKnown = true))
+    }
+
+    fun setChatActive(active: Boolean) {
+        if (!active) chatActions.cancelSessionSummary()
+        modelSettingsActions.setChatActive(active)
+    }
+
+    fun setAppForeground(active: Boolean) = modelSettingsActions.setAppForeground(active)
+
+    fun setPickerPending(pending: Boolean) = modelSettingsActions.setPickerPending(pending)
+
+    fun handleMemoryPressure() {
+        chatActions.cancelSessionSummary()
+        modelSettingsActions.handleMemoryPressure()
+    }
+
+    fun trackVoiceInput(job: Job) {
+        chatActions.cancelSessionSummary()
+        modelSettingsActions.trackVoiceInput(job)
     }
 
     fun refreshDeviceCapability(scope: CoroutineScope? = null) {
@@ -176,17 +203,27 @@ class AppStore(
     fun startModelDownload(userInitiated: Boolean = true) =
         modelSettingsActions.startModelDownload(userInitiated)
 
-    fun prewarmImageInferenceIfDownloaded() =
-        modelSettingsActions.prewarmImageInferenceIfDownloaded()
-
     fun refreshModelDownloadInfo() = modelSettingsActions.refreshModelDownloadInfo()
+
+    fun retrySourceInventory() {
+        knowledgeStore.retry()
+        notesStore.retryLoad()
+        chatActions.refreshSourceInventory()
+    }
 
     fun downloadOrUpdateKnowledgePack(stableId: String) = knowledgeStore.downloadOrUpdate(stableId)
 
-    fun cancelKnowledgePackDownload(stableId: String) = knowledgeStore.cancel(stableId)
-
     fun setKnowledgePackEnabled(stableId: String, enabled: Boolean) =
         knowledgeStore.setEnabled(stableId, enabled)
+
+    fun hasSeenSourceIntroduction() =
+        sourcePreferences.getBoolean("sources_introduction_seen", false)
+
+    fun completeSourceIntroduction() {
+        sourcePreferences.edit().putBoolean("sources_introduction_seen", true).apply()
+    }
+
+    fun cancelKnowledgePackDownload(stableId: String) = knowledgeStore.cancel(stableId)
 
     fun cancelDownload() {
         chatActions.cancelGenerationForDownload()
@@ -201,12 +238,20 @@ class AppStore(
 
     fun cancelOverflowDialog() = chatActions.cancelOverflowDialog()
 
-    fun updateModelSettings(state: ModelSettingsState) =
+    fun updateModelSettings(state: ModelSettingsState) {
+        chatActions.cancelGenerationForDownload()
         modelSettingsActions.updateModelSettings(state)
+    }
 
-    fun resetModelSettings() = modelSettingsActions.resetModelSettings()
+    fun resetModelSettings() {
+        chatActions.cancelGenerationForDownload()
+        modelSettingsActions.resetModelSettings()
+    }
 
     fun updateDeveloperSettings(state: DeveloperSettingsState) {
+        if (state.systemPrompt != _state.value.developerSettings.systemPrompt) {
+            chatActions.cancelGenerationForDownload()
+        }
         _state.value = _state.value.copy(developerSettings = state)
     }
 

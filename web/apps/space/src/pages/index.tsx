@@ -8,6 +8,7 @@ import { SpacePublicProfileNotificationControl } from "components/PublicProfileN
 import { SpaceRouteFallback } from "components/RouteFallback";
 import log from "ente-base/log";
 import React, { useEffect, useMemo, useState } from "react";
+import { FriendRequestScreen } from "screens/FriendRequestScreen";
 import { OnboardingScreen, onboardingGreen } from "screens/OnboardingScreen";
 import { ProfileScreen } from "screens/ProfileScreen";
 import {
@@ -26,6 +27,7 @@ import {
     type SpaceInviteRoute,
 } from "services/invite";
 import {
+    clearSpaceFriendsCache,
     loadCurrentSpaceRelationship,
     loadPublicSpaceIdentity,
     openPublicSpaceLink,
@@ -52,13 +54,8 @@ interface PageProps {
     invitePreview?: boolean;
 }
 
-const addFriendOnboardingTitle = (username: string) => (
-    <>
-        {`See @${username}'s`}
-        <br />
-        everyday photos
-    </>
-);
+const addFriendOnboardingTitle = (username: string) =>
+    `See what @${username}’s up to`;
 
 const addFriendPostActionOnboardingTitle = (
     username: string,
@@ -165,9 +162,10 @@ const PublicFriendRequestScreen: React.FC<PublicFriendRequestScreenProps> = ({
                     gridTemplateColumns: "40px 1fr 40px",
                     height: 40,
                     maxWidth: 390,
-                    mt: "clamp(24px, 5.5svh, 44px)",
+                    mt: "calc(clamp(24px, 5.5svh, 44px) + var(--space-ios-safe-area-top, 0px))",
                     mx: "auto",
-                    px: 3,
+                    pl: "max(24px, var(--space-ios-safe-area-left, 0px))",
+                    pr: "max(24px, var(--space-ios-safe-area-right, 0px))",
                     width: "100%",
                 }}
             >
@@ -223,12 +221,10 @@ const PublicFriendRequestScreen: React.FC<PublicFriendRequestScreenProps> = ({
                         m: 0,
                         maxWidth: "100%",
                         overflowWrap: "anywhere",
+                        textWrap: "balance",
                     }}
                 >
-                    <Box component="span" sx={{ display: "block" }}>
-                        {`See @${identity.username}’s`}
-                    </Box>
-                    everyday photos
+                    {addFriendOnboardingTitle(identity.username)}
                 </Box>
                 <Box
                     component="p"
@@ -242,7 +238,7 @@ const PublicFriendRequestScreen: React.FC<PublicFriendRequestScreenProps> = ({
                         maxWidth: 260,
                     }}
                 >
-                    {`Add @${identity.username} as a friend to see what they're up to on Ente Space`}
+                    {`Add @${identity.username} as a friend to see their life in photos and share a little of yours on Ente Space`}
                 </Box>
             </Box>
             <Box
@@ -527,7 +523,10 @@ export const Page: React.FC<PageProps> = ({ invitePreview }) => {
         if (!publicIdentity && publicError) {
             return (
                 <>
-                    <SpacePageMeta themeColor="#FFFFFF" preview="invite" />
+                    <SpacePageMeta
+                        themeColor={spaceAppBackgroundColor}
+                        preview="invite"
+                    />
                     <PublicProfileUnavailable />
                 </>
             );
@@ -608,9 +607,8 @@ export const Page: React.FC<PageProps> = ({ invitePreview }) => {
         return (
             <>
                 <SpacePageMeta
-                    themeColor={
-                        publicLink ? spaceAppBackgroundColor : "#FFFFFF"
-                    }
+                    themeColor={spaceAppBackgroundColor}
+                    title={profile && !publicLink ? "Add friend" : undefined}
                     preview="invite"
                 />
                 {publicLink ? (
@@ -627,7 +625,13 @@ export const Page: React.FC<PageProps> = ({ invitePreview }) => {
                             onAddFriendForPostAction={(intent) =>
                                 void addFriend(intent)
                             }
-                            onBack={() => window.location.assign("/")}
+                            onBack={() =>
+                                void router.back(
+                                    profile
+                                        ? spaceRoutes.home
+                                        : spaceRoutes.onboarding,
+                                )
+                            }
                             onCreateSpace={createSpace}
                             onLoadPostImage={publicLink.loadPostImage}
                             postItems={publicPostItems}
@@ -644,6 +648,25 @@ export const Page: React.FC<PageProps> = ({ invitePreview }) => {
                         />
                         {!profile && <SpaceMobileBestToast />}
                     </>
+                ) : profile ? (
+                    <FriendRequestScreen
+                        key={publicIdentity.spaceId}
+                        username={publicIdentity.username}
+                        onBack={() => void router.back(spaceRoutes.friends)}
+                        onAddFriend={async () => {
+                            const status = await requestFriendByUsername({
+                                spaceUsername: publicIdentity.username,
+                            });
+                            clearPendingSpaceInvite();
+                            clearPendingSpaceInviteFriend();
+                            clearPendingSpaceInviteIntent();
+                            if (status == "friend") {
+                                clearSpaceFriendsCache();
+                                setAuthenticatedProfileRoute("friend");
+                            }
+                            return status;
+                        }}
+                    />
                 ) : (
                     <PublicFriendRequestScreen
                         identity={publicIdentity}
@@ -663,7 +686,10 @@ export const Page: React.FC<PageProps> = ({ invitePreview }) => {
 
     return (
         <>
-            <SpacePageMeta themeColor={onboardingGreen} preview="home" />
+            <SpacePageMeta
+                themeColor={spaceAppBackgroundColor}
+                preview="home"
+            />
             <OnboardingScreen
                 onCreateAccount={() => void router.push(spaceRoutes.signup)}
                 onLogin={() => void router.push(spaceRoutes.login)}

@@ -12,7 +12,7 @@ import type { CreateProfileSource } from "utils/routes";
 
 export type OnboardingEntrySource = "direct" | "add-friend-link";
 export type SpaceProfileLoadStatus = "error" | "loading" | "ready";
-export type SpacePostPublishPhase = "failed" | "posted" | "posting";
+type SpacePostPublishPhase = "failed" | "posted" | "posting";
 export interface SpacePostPublication {
     phase: SpacePostPublishPhase;
     post: SpacePost;
@@ -27,9 +27,10 @@ export interface RefreshSpaceProfileOptions {
     throwOnError?: boolean;
 }
 
-export interface PendingSpaceFeedPost {
+interface PendingSpaceFeedPost {
     avatarUrl?: string | null;
     caption?: string;
+    frameAspectRatio: number;
     friendID: string;
     height?: number;
     id: string;
@@ -37,23 +38,24 @@ export interface PendingSpaceFeedPost {
     name: string;
     spaceId: string;
     photoCount: number;
+    postId?: number;
+    processing?: string;
     status: "pending";
     timestampMs: number;
     width?: number;
 }
 
-export type FailedSpaceFeedPost = Omit<PendingSpaceFeedPost, "status"> & {
-    reason?: "post-limit";
+type FailedSpaceFeedPost = Omit<PendingSpaceFeedPost, "status"> & {
     status: "failed";
 };
 
-export interface PostedSpaceFeedPost {
+interface PostedSpaceFeedPost {
     id: string;
     post: SpacePost;
     status: "posted";
 }
 
-export interface ReadySpaceFeedPost {
+interface ReadySpaceFeedPost {
     id: string;
     post: SpacePost;
     status: "ready";
@@ -92,6 +94,7 @@ export interface SpaceAppState {
         images: SpaceDraftPostImage[],
         caption: string,
     ) => Promise<SpacePost>;
+    retryPost: (localPostId: string) => Promise<void>;
     refreshProfile: (
         options?: RefreshSpaceProfileOptions,
     ) => Promise<SetupProfile | null>;
@@ -119,7 +122,7 @@ export interface SpaceAppState {
     setPendingCreateProfile: React.Dispatch<
         React.SetStateAction<PendingCreateProfile | null>
     >;
-    setProfile: (profile: SetupProfile | null) => void;
+    setProfile: React.Dispatch<React.SetStateAction<SetupProfile | null>>;
     setSignupEmail: React.Dispatch<React.SetStateAction<string>>;
 }
 

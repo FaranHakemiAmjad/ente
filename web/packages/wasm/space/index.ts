@@ -10,8 +10,9 @@ export type {
     DecryptedSpaceProfile,
     MessageConversationActivity,
     MessageResponse,
-    PostObjectPayload,
+    PostAsset,
     PostPage,
+    PostPhoto,
     PostResponse,
     ProfileAvatarResponse,
     SpaceAccountCtxHandle,
@@ -19,6 +20,7 @@ export type {
     SpaceKeyResponse,
     SpaceLinkCtxHandle,
     UpdateSpaceProfileResponse,
+    UploadedPostAsset,
 } from "./pkg/ente_space_wasm";
 
 const wasm = () => import("./pkg/ente_space_wasm");

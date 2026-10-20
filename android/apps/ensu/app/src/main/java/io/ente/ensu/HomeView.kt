@@ -3,6 +3,7 @@
 package io.ente.ensu
 
 import android.annotation.SuppressLint
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -41,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.core.content.OnTrimMemoryProvider
+import androidx.core.util.Consumer
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -92,6 +95,7 @@ fun HomeView(
         val navBackStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = navBackStackEntry?.destination?.route ?: HomeRoute.Chat
         val isChatRoute = currentRoute == HomeRoute.Chat
+        val latestIsChatRoute by rememberUpdatedState(isChatRoute)
         var deleteSessionTarget by remember { mutableStateOf<io.ente.ensu.chat.ChatSession?>(null) }
         var showLogShareDialog by remember { mutableStateOf(false) }
         var showSignInComingSoon by remember { mutableStateOf(false) }
@@ -199,18 +203,55 @@ fun HomeView(
 
         DisposableEffect(lifecycleOwner) {
             val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME) {
+                if (event == Lifecycle.Event.ON_START) {
+                    latestStore.setAppForeground(true)
                     latestStore.notesStore.setForeground(true)
+                } else if (event == Lifecycle.Event.ON_RESUME) {
                     latestStore.refreshModelDownloadInfo()
+                    latestStore.setChatActive(latestIsChatRoute)
+                } else if (event == Lifecycle.Event.ON_PAUSE) {
+                    latestStore.setChatActive(false)
                 } else if (event == Lifecycle.Event.ON_STOP) {
                     latestStore.notesStore.setForeground(false)
+                    latestStore.setChatActive(false)
+                    latestStore.setAppForeground(false)
                 }
             }
             latestStore.notesStore.setForeground(
                 lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
             )
+            latestStore.setAppForeground(
+                lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            )
             lifecycleOwner.lifecycle.addObserver(observer)
-            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            latestStore.setChatActive(
+                isChatRoute &&
+                    lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            )
+            onDispose {
+                latestStore.setChatActive(false)
+                latestStore.setAppForeground(false)
+                lifecycleOwner.lifecycle.removeObserver(observer)
+            }
+        }
+
+        LaunchedEffect(isChatRoute, lifecycleOwner) {
+            latestStore.setChatActive(
+                isChatRoute &&
+                    lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            )
+        }
+
+        DisposableEffect(lifecycleOwner) {
+            val callbacks = lifecycleOwner as? OnTrimMemoryProvider
+            val listener =
+                Consumer<Int> { level ->
+                    if (level != ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+                        latestStore.handleMemoryPressure()
+                    }
+                }
+            callbacks?.addOnTrimMemoryListener(listener)
+            onDispose { callbacks?.removeOnTrimMemoryListener(listener) }
         }
 
         LaunchedEffect(whatsNewService) {
@@ -224,16 +265,22 @@ fun HomeView(
         val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
 
         val handleAttachmentSelected: (AttachmentType) -> Unit = handle@{ type ->
-            when (type) {
-                AttachmentType.Image -> {
-                    val imageCount =
-                        appState.chat.attachments.count { it.type == AttachmentType.Image }
-                    if (imageCount >= MaxImageAttachmentsPerMessage) return@handle
-                    imagePicker.launch("image/*")
+            if (
+                type == AttachmentType.Image &&
+                    (!appState.chat.supportsImageAttachments ||
+                        appState.chat.attachments.count { it.type == AttachmentType.Image } >=
+                            MaxImageAttachmentsPerMessage)
+            )
+                return@handle
+            store.setPickerPending(true)
+            try {
+                when (type) {
+                    AttachmentType.Image -> imagePicker.launch("image/*")
+                    AttachmentType.Document -> documentPicker.launch(arrayOf("*/*"))
                 }
-                AttachmentType.Document -> {
-                    documentPicker.launch(arrayOf("*/*"))
-                }
+            } catch (error: Exception) {
+                store.setPickerPending(false)
+                throw error
             }
         }
 
@@ -412,6 +459,7 @@ private fun <I> rememberAttachmentPicker(
     val latestStore by rememberUpdatedState(store)
 
     return rememberLauncherForActivityResult(contract = contract) { uri ->
+        latestStore.setPickerPending(false)
         if (uri != null) {
             latestStore.setAttachmentProcessing(true)
             scope.launch {
@@ -419,9 +467,6 @@ private fun <I> rememberAttachmentPicker(
                     withContext(Dispatchers.IO) { buildAttachmentFromUri(context, uri, type) }
                 if (attachment != null) {
                     latestStore.addAttachment(attachment)
-                    if (type == AttachmentType.Image) {
-                        latestStore.prewarmImageInferenceIfDownloaded()
-                    }
                 } else {
                     latestStore.setAttachmentProcessing(false)
                 }
@@ -456,7 +501,7 @@ private fun buildAttachmentFromUri(
         if (type == AttachmentType.Image) {
             val inputStream = resolver.openInputStream(uri) ?: return@runCatching null
             val originalBytes = inputStream.use { input -> input.readAttachmentImageBytes() }
-            val compressedBytes = compressAttachmentImage(originalBytes)
+            val compressedBytes = compressAttachmentImage(originalBytes.toDirectByteBuffer())
             FileOutputStream(destination).use { output -> output.write(compressedBytes) }
             finalName = normalizedJpegAttachmentName(name ?: safeName)
         } else {

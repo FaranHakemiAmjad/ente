@@ -64,12 +64,12 @@ class _AccountCredentialsPageState
       return context.strings.accountCredentials;
     }
 
-    final controllerName = _nameController.text.trim();
+    final controllerName = _nameController.text;
     if (controllerName.isNotEmpty) {
       return controllerName;
     }
 
-    final dataName = (currentData?.name ?? '').trim();
+    final dataName = currentData?.name ?? '';
     if (dataName.isNotEmpty) {
       return dataName;
     }
@@ -85,28 +85,24 @@ class _AccountCredentialsPageState
 
   @override
   bool validateForm() {
-    return _nameController.text.trim().isNotEmpty &&
-        _usernameController.text.trim().isNotEmpty &&
-        _passwordController.text.trim().isNotEmpty;
+    return _nameController.text.isNotEmpty;
   }
 
   @override
   bool get hasUnsavedChanges {
-    return _nameController.text.trim() != _initialName.trim() ||
-        _usernameController.text.trim() != _initialUsername.trim() ||
-        _passwordController.text.trim() != _initialPassword.trim() ||
-        _notesController.text.trim() != _initialNotes.trim();
+    return _nameController.text != _initialName ||
+        _usernameController.text != _initialUsername ||
+        _passwordController.text != _initialPassword ||
+        _notesController.text != _initialNotes;
   }
 
   @override
   AccountCredentialData createInfoData() {
     return AccountCredentialData(
-      name: _nameController.text.trim(),
-      username: _usernameController.text.trim(),
-      password: _passwordController.text.trim(),
-      notes: _notesController.text.trim().isEmpty
-          ? null
-          : _notesController.text.trim(),
+      name: _nameController.text,
+      username: _usernameController.text,
+      password: _passwordController.text,
+      notes: _notesController.text.isEmpty ? null : _notesController.text,
     );
   }
 
@@ -128,7 +124,6 @@ class _AccountCredentialsPageState
         label: context.strings.username,
         hintText: context.strings.usernameHint,
         controller: _usernameController,
-        isRequired: true,
         textInputAction: TextInputAction.next,
         onChanged: (_) => onFieldChanged(),
       ),
@@ -137,7 +132,6 @@ class _AccountCredentialsPageState
         label: context.strings.password,
         hintText: context.strings.passwordHint,
         controller: _passwordController,
-        isRequired: true,
         isPasswordInput: true,
         textInputAction: TextInputAction.next,
         onChanged: (_) => onFieldChanged(),
@@ -162,25 +156,34 @@ class _AccountCredentialsPageState
     final passwordText = _passwordController.text;
     final notesText = _notesController.text;
 
-    final fields = <Widget>[
-      buildViewField(label: context.strings.username, value: usernameText),
-      const SizedBox(height: 24),
-      buildViewField(
-        label: context.strings.password,
-        value: passwordText,
-        isSecret: true,
-      ),
-    ];
+    final fields = <Widget>[];
 
-    if (notesText.trim().isNotEmpty) {
-      fields.addAll([
-        const SizedBox(height: 24),
+    if (usernameText.isNotEmpty) {
+      fields.add(
+        buildViewField(label: context.strings.username, value: usernameText),
+      );
+    }
+
+    if (passwordText.isNotEmpty) {
+      if (fields.isNotEmpty) fields.add(const SizedBox(height: 24));
+      fields.add(
+        buildViewField(
+          label: context.strings.password,
+          value: passwordText,
+          isSecret: true,
+        ),
+      );
+    }
+
+    if (notesText.isNotEmpty) {
+      if (fields.isNotEmpty) fields.add(const SizedBox(height: 24));
+      fields.add(
         buildViewField(
           label: context.strings.credentialNotes,
           value: notesText,
           maxLines: 6,
         ),
-      ]);
+      );
     }
 
     return fields;

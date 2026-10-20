@@ -11,11 +11,16 @@ import io.ente.ensu.coroutines.runCatchingCancellable
 import io.ente.ensu.device.isChatSupported
 import io.ente.ensu.logging.FileLogRepository
 import io.ente.ensu.logging.LogLevel
+import io.ente.ensu.notes.NotesStore
 import io.ente.ensu.settings.IS_ENSU_PACKS_ENABLED
 import io.ente.ensu.settings.SessionPreferencesDataStore
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -25,12 +30,30 @@ internal class ModelSettingsActions(
     private val sessionPreferences: SessionPreferencesDataStore,
     private val llmProvider: LlmProvider,
     private val logRepository: FileLogRepository,
+    private val notesStore: NotesStore,
+    private val awaitKnowledgeReady: suspend () -> Unit,
 ) {
     private var scope: CoroutineScope? = null
     private var modelDownloadJob: Job? = null
+    private var chatActive = false
+    private var appForeground = false
+    @Volatile private var pickerPending = false
+    private var backgroundReleaseJob: Job? = null
+    private val activeVoiceJobs = AtomicInteger()
+    private var warmupSuppressed = false
+    private var warmupJob: Job? = null
+    private var warmupOwner: String? = null
+    private var warmupSelection: LlmModelSelection? = null
 
-    fun setScope(scope: CoroutineScope) {
+    fun bootstrap(scope: CoroutineScope) {
         this.scope = scope
+        scope.launch {
+            llmProvider.setChatForeground(chatActive)
+            llmProvider.setAppForeground(appForeground)
+            awaitKnowledgeReady()
+            notesStore.awaitReady()
+            state.collect { refreshChatWarmup() }
+        }
     }
 
     fun updateModelSettings(settings: ModelSettingsState) {
@@ -86,6 +109,7 @@ internal class ModelSettingsActions(
                 chat =
                     appState.chat.copy(
                         isModelDownloaded = isDownloaded,
+                        supportsImageAttachments = llmProvider.supportsImages(selection),
                         isDownloading = if (isDownloaded) false else appState.chat.isDownloading,
                         downloadPercent = if (isDownloaded) null else appState.chat.downloadPercent,
                         downloadStatus = if (isDownloaded) null else appState.chat.downloadStatus,
@@ -303,27 +327,139 @@ internal class ModelSettingsActions(
         }
     }
 
-    fun prewarmImageInferenceIfDownloaded() {
+    fun setChatActive(active: Boolean) {
+        if (chatActive == active) return
+        chatActive = active
+        llmProvider.setChatForeground(active)
+        if (active) {
+            warmupSuppressed = false
+            if (
+                warmupJob?.isActive != true &&
+                    warmupSelection?.let(llmProvider::loadedContextLength) == null
+            ) {
+                cancelChatWarmup(releaseLoadedModel = false)
+            }
+        } else if (!pickerPending) {
+            cancelChatWarmup(releaseLoadedModel = false)
+            scope?.launch { llmProvider.releaseInactiveChatResources { pickerPending } }
+        }
+        refreshChatWarmup()
+    }
+
+    fun setAppForeground(active: Boolean) {
+        appForeground = active
+        backgroundReleaseJob?.cancel()
+        backgroundReleaseJob = null
+        if (active) {
+            scope?.launch { llmProvider.setAppForeground(true) }
+        } else if (pickerPending) {
+            backgroundReleaseJob = scope?.launch {
+                delay(60_000)
+                releaseBackgroundResources()
+            }
+        } else {
+            releaseBackgroundResources()
+        }
+    }
+
+    fun setPickerPending(pending: Boolean) {
+        pickerPending = pending
+    }
+
+    private fun releaseBackgroundResources() {
+        cancelChatWarmup(releaseLoadedModel = false)
+        scope?.launch { llmProvider.setAppForeground(false) }
+    }
+
+    fun handleMemoryPressure() {
+        warmupSuppressed = true
+        cancelChatWarmup()
+        scope?.launch { llmProvider.handleMemoryPressure() }
+    }
+
+    fun trackVoiceInput(job: Job) {
+        activeVoiceJobs.incrementAndGet()
+        cancelChatWarmup(releaseLoadedModel = false)
+        job.invokeOnCompletion {
+            if (activeVoiceJobs.decrementAndGet() == 0) scope?.launch { refreshChatWarmup() }
+        }
+    }
+
+    fun cancelChatWarmup(releaseLoadedModel: Boolean = true) {
+        warmupJob?.cancel()
+        warmupJob = null
+        val owner = warmupOwner
+        warmupOwner = null
+        warmupSelection = null
+        if (owner != null && releaseLoadedModel)
+            scope?.launch { llmProvider.releaseChatWarmup(owner) }
+    }
+
+    private fun refreshChatWarmup() {
+        val current = state.value
+        val selection = resolveSelection(current.modelSettings)
+        val eligible =
+            appForeground &&
+                chatActive &&
+                !warmupSuppressed &&
+                activeVoiceJobs.get() == 0 &&
+                current.chat.deviceCapability.isChatSupported()
+        if (warmupSelection != null && warmupSelection != selection) {
+            cancelChatWarmup()
+        }
+        if (
+            !eligible ||
+                warmupOwner != null ||
+                current.chat.isGenerating ||
+                current.chat.isDownloading ||
+                !llmProvider.isChatModelReady(selection)
+        )
+            return
         val scope = scope ?: return
-        val currentState = state.value
-        if (currentState.chat.isGenerating || currentState.chat.isDownloading) return
-        if (!currentState.chat.deviceCapability.isChatSupported()) return
-
-        val selection = resolveSelection(currentState.modelSettings)
-        if (!llmProvider.isChatModelReady(selection)) return
-
-        scope.launch {
+        val owner = UUID.randomUUID().toString()
+        warmupOwner = owner
+        warmupSelection = selection
+        warmupJob = scope.launch {
+            var ready = false
             try {
-                llmProvider.prewarmImageInference(selection)
-            } catch (err: kotlinx.coroutines.CancellationException) {
-                throw err
-            } catch (err: Throwable) {
+                delay(350)
+                awaitKnowledgeReady()
+                notesStore.awaitReady()
+                coroutineContext.ensureActive()
+                ready =
+                    retryChatWarmup(
+                        isEligible = {
+                            val latest = state.value
+                            warmupOwner == owner &&
+                                resolveSelection(latest.modelSettings) == selection &&
+                                appForeground &&
+                                chatActive &&
+                                !warmupSuppressed &&
+                                activeVoiceJobs.get() == 0 &&
+                                latest.chat.deviceCapability.isChatSupported() &&
+                                !latest.chat.isGenerating &&
+                                !latest.chat.isDownloading
+                        }
+                    ) {
+                        llmProvider.prewarmChatModelIfDownloaded(selection, owner)
+                    }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
                 logRepository.log(
-                    LogLevel.Warning,
-                    "Image inference prewarm skipped",
-                    details = err.message,
+                    LogLevel.Info,
+                    "Chat warm-up skipped",
                     tag = "Model",
+                    throwable = error,
                 )
+            } finally {
+                if (warmupOwner == owner) {
+                    warmupJob = null
+                    if (!ready) {
+                        warmupOwner = null
+                        warmupSelection = null
+                    }
+                }
             }
         }
     }
@@ -372,12 +508,10 @@ internal class ModelSettingsActions(
                 preferredModelId = settings.modelId.takeIf { it.isNotEmpty() },
             )
         val contextLength = settings.contextLength.toIntOrNull()
-        val maxTokens = settings.maxTokens.toIntOrNull()?.takeIf { it > 0 }
 
         return LlmModelSelection(
             id = modelId,
             contextLength = contextLength,
-            maxTokens = maxTokens,
         )
     }
 

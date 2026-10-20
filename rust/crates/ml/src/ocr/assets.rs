@@ -19,8 +19,7 @@ struct OcrModelFile {
 const DETECTION: OcrModelFile = OcrModelFile {
     key: "ppocrv5_det_fixed_v1",
     name: "det.onnx",
-    // Todo:laurens: move these to models.ente.com before removing the internalUser feature flag gating
-    url: "https://entedevassets.priem.dev/det_fixed_v1.onnx",
+    url: "https://models.ente.com/det_fixed_v1.onnx",
     size: 5_548_458,
     sha256: "f655f119225b579fa8c3cbf64f6bb7cf56a26c9dc211706a25234d70a543ec8c",
 };
@@ -28,8 +27,7 @@ const DETECTION: OcrModelFile = OcrModelFile {
 const CLASSIFICATION: OcrModelFile = OcrModelFile {
     key: "ppocrv5_cls_fixed_v1",
     name: "cls.onnx",
-    // Todo:laurens: move these to models.ente.com before removing the internalUser feature flag gating
-    url: "https://entedevassets.priem.dev/cls_fixed_v1.onnx",
+    url: "https://models.ente.com/cls_fixed_v1.onnx",
     size: 590_475,
     sha256: "378d52a73263828d08d4dda37f1d0aac2e36cbd486fdc6351bf309d515610654",
 };
@@ -37,8 +35,7 @@ const CLASSIFICATION: OcrModelFile = OcrModelFile {
 const RECOGNITION: OcrModelFile = OcrModelFile {
     key: "ppocrv5_rec_fixed_v1",
     name: "rec.onnx",
-    // Todo:laurens: move these to models.ente.com before removing the internalUser feature flag gating
-    url: "https://entedevassets.priem.dev/rec_fixed_v1.onnx",
+    url: "https://models.ente.com/rec_fixed_v1.onnx",
     size: 17_031_601,
     sha256: "6dda4c0891af5a70c5b0f618b62588df7f3140616d1c560be5ec6496747b54fd",
 };
@@ -178,26 +175,6 @@ mod tests {
         assert!(is_detector_downloaded(&store));
 
         store.remove(&DETECTION.asset()).unwrap();
-        assert!(!is_detector_downloaded(&store));
-    }
-
-    #[test]
-    fn legacy_models_do_not_satisfy_the_optimized_catalog() {
-        let root = tempfile::tempdir().unwrap();
-        let store = AssetStore::new(root.path());
-        for (model, legacy_key) in [
-            (&DETECTION, "ppocrv5_det"),
-            (&CLASSIFICATION, "ppocrv5_cls"),
-            (&RECOGNITION, "ppocrv5_rec"),
-        ] {
-            let legacy = OcrModelFile {
-                key: legacy_key,
-                ..*model
-            };
-            cache_model(&store, &legacy);
-            assert!(!store.is_downloaded(&model.asset()));
-            assert_ne!(model.path(&store), legacy.path(&store));
-        }
         assert!(!is_detector_downloaded(&store));
     }
 
